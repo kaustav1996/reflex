@@ -134,6 +134,28 @@ gated Reflex tool `server__tool`; `/mcp` shows status in a session). The officia
 [TypeSafe agent skill](https://github.com/typesafe-ai/skills) and Reflex's own skills are
 bundled and enabled automatically.
 
+### Built-in connectors (`reflex connect`)
+
+Skip the config entirely for the official, vendor-hosted remote MCP servers — Reflex knows the
+endpoints and transport, so you only name the service:
+
+```bash
+reflex connect              # list presets and show what's enabled
+reflex connect gmail        # Google Gmail          (OAuth, via mcp-remote bridge)
+reflex connect slack        # Slack                 (OAuth)
+reflex connect atlassian    # Atlassian Jira + Confluence (OAuth)
+reflex connect linear       # Linear                (OAuth)
+reflex connect linear-key --key lin_api_xxx   # Linear over streamable-HTTP with a personal API key
+reflex connect linear --readonly             # read-only variant where supported
+reflex connect remove slack # disable + delete a connector
+```
+
+The four OAuth remotes (Gmail, Slack, Atlassian, Linear) are bridged through `npx -y mcp-remote`,
+which opens a browser tab on first use and caches the token in `~/.mcp-auth/`; later sessions are
+silent. `linear-key` skips the bridge entirely and talks streamable-HTTP with a bearer token
+(stored in `~/.reflex/keys.json`, or read from `LINEAR_API_KEY`). After enabling, start a session
+and run `/mcp` to see the tools; each one is a gated Reflex tool named `<service>__<tool>`.
+
 ## Look
 
 The TUI uses the typesafe.ai palette: near-black `#1e1e1e`, off-white `#fefefe`, pink accent
@@ -151,6 +173,7 @@ src/web/ + web/app.html       `reflex web`: HTTP + SSE server spawning one `refl
                               Agents + Settings tabs, webhooks, presence of terminal sessions
 src/agents/                   agent store (~/.reflex/agents), cron matcher, headless runner (--mode json), scheduler, CLI
 src/extensions/mcp/           MCP client (stdio + streamable HTTP) exposing connector tools
+                              presets.ts (gmail/slack/atlassian/linear presets), connect.ts (`reflex connect`)
 skills/                       reflex, reflex-agents, typesafe-ai (official, MIT) — synced into ~/.reflex/agent/skills
 src/extensions/typesafe/      the reflex layer
   client.ts                     minimal System One client (fetch, retries, stats, answer validation)

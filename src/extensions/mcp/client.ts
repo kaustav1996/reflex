@@ -3,7 +3,7 @@
  * JSON-RPC 2.0; initialize → tools/list → tools/call. No dependencies.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getReflexHome } from "../../config.js";
 
@@ -46,6 +46,7 @@ export function loadMcpConfig(): McpConfig {
 	}
 }
 export function saveMcpConfig(config: McpConfig): void {
+	mkdirSync(getReflexHome(), { recursive: true });
 	writeFileSync(mcpConfigPath(), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 }
 
