@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reflex</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 28 28%27%3E%3Crect x=%271.5%27 y=%271.5%27 width=%2725%27 height=%2725%27 fill=%27%23f386a1%27 stroke=%27%231e1e1e%27 stroke-width=%273%27/%3E%3Cpath d=%27M15.5 4 L8 15.5 H14 L12.5 24 L20 12.5 H14 Z%27 fill=%27%231e1e1e%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  :root {
+    --paper: #fefefe; --ink: #1e1e1e; --ink-soft: #1e1e1edb; --line: #1e1e1e;
+    --pink: #f386a1; --magenta: #d45bb6; --teal: #09aea1; --green: #03aa5c; --mist: #abbab9; --gray: #858585; --light: #e5e5e5;
+    --user-bg: #f4f4f4; --tool-bg: #f7f7f7; --tool-ok: #e6f5ec; --tool-err: #fbe6e6; --reflex-bg: #fbe3ea;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --paper: #1e1e1e; --ink: #fefefe; --ink-soft: #fefefedb; --line: #fefefe; --light: #3a3a3a;
+    --user-bg: #2a2a2a; --tool-bg: #262626; --tool-ok: #22302a; --tool-err: #3a2626; --reflex-bg: #3a2a31; --gray: #9a9a9a;
+  } }
+  :root[data-theme="dark"] {
+    --paper: #1e1e1e; --ink: #fefefe; --ink-soft: #fefefedb; --line: #fefefe; --light: #3a3a3a;
+    --user-bg: #2a2a2a; --tool-bg: #262626; --tool-ok: #22302a; --tool-err: #3a2626; --reflex-bg: #3a2a31; --gray: #9a9a9a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--paper); color: var(--ink); font: 13px/1.5 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+         background-image: radial-gradient(var(--light) 0.6px, transparent 0.6px); background-size: 8px 8px; }
+  /* Retro window chrome, like typesafe.ai */
+  .win { border: 2px solid var(--line); background: var(--paper); box-shadow: 4px 4px 0 var(--line); }
+  .titlebar { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-bottom: 2px solid var(--line);
+              background: repeating-linear-gradient(180deg, var(--line) 0 1px, transparent 1px 3px); }
+  .titlebar .tag { background: var(--paper); padding: 0 8px; font-weight: 700; letter-spacing: .02em; }
+  .titlebar .tag.pink { background: var(--pink); color: #1e1e1e; }
+  .titlebar .tag.brand { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 4px; }
+  .logo { display: block; }
+  .sec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--gray); margin: 8px 6px 2px; }
+  .sess.term .dot { background: var(--green); }
+  .sess .meta { font-size: 10px; color: var(--gray); margin-left: 4px; }
+  .sess.recent { color: var(--gray); }
+  .sess.recent:hover { color: var(--ink); }
+  .ro { font-size: 11px; color: var(--gray); padding: 6px 10px; border-top: 2px solid var(--line); }
+  .titlebar .spacer { flex: 1; }
+  .titlebar #title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 62%; }
+  .titlebar .btn { background: var(--paper); border: 1px solid var(--line); padding: 0 6px; cursor: pointer; font: inherit; color: var(--ink); }
+  .titlebar .btn:hover { background: var(--pink); color: #1e1e1e; }
+  #app { display: grid; grid-template-columns: 240px 1fr; grid-template-rows: 100%; height: 100%; gap: 16px; padding: 16px; }
+  #app > * { min-width: 0; }
+  .titlebar, .titlebar .tag { min-width: 0; }
+  #side { display: flex; flex-direction: column; min-height: 0; }
+  #side .body { padding: 8px; overflow: auto; flex: 1; }
+  .sess { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid transparent; cursor: pointer; }
+  .sess:hover { border-color: var(--line); }
+  .sess.active { background: var(--pink); color: #1e1e1e; }
+  .sess .x { margin-left: auto; opacity: .6; }
+  .sess .x:hover { opacity: 1; }
+  .sess .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mist); }
+  .sess.busy .dot { background: var(--pink); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  .side-foot { padding: 8px; border-top: 2px solid var(--line); font-size: 11px; color: var(--gray); }
+  #main { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  #chat { flex: 1; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 100%; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { background: var(--user-bg); border-left: 3px solid var(--pink); padding: 6px 10px; }
+  .msg.assistant { padding: 2px 4px; }
+  .msg.assistant.md p { margin: 0 0 6px; }
+  .msg.assistant.md code { background: var(--tool-bg); padding: 0 3px; }
+  .msg.assistant.md pre { background: var(--tool-bg); border: 1px solid var(--light); padding: 8px; overflow: auto; }
+  .msg.thinking { color: var(--gray); font-style: italic; }
+  .tool { border: 1px solid var(--line); background: var(--tool-bg); font-size: 12px; }
+  .tool .head { display: flex; gap: 8px; padding: 4px 8px; cursor: pointer; align-items: center; }
+  .tool .head .name { font-weight: 700; }
+  .tool .head .arg { color: var(--gray); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .tool.ok .head { background: var(--tool-ok); } .tool.err .head { background: var(--tool-err); } .tool.run .head { background: var(--reflex-bg); }
+  .tool .out { display: none; padding: 6px 8px; max-height: 320px; overflow: auto; white-space: pre-wrap; border-top: 1px solid var(--light); }
+  .tool.open .out { display: block; }
+  .tool img { max-width: 100%; display: block; margin-top: 6px; border: 1px solid var(--light); }
+  .reflex { font-size: 12px; color: var(--gray); }
+  .reflex b { color: var(--pink); font-weight: 500; }
+  .notice { font-size: 12px; padding: 4px 8px; border: 1px dashed var(--line); }
+  .notice.warning { border-color: var(--magenta); } .notice.error { border-color: #c0392b; color: #c0392b; }
+  #status { display: flex; gap: 14px; padding: 4px 10px; border-top: 2px solid var(--line); font-size: 11px; color: var(--gray); flex-wrap: wrap; }
+  #status .k { color: var(--pink); }
+  #composer { display: flex; gap: 8px; padding: 8px; border-top: 2px solid var(--line); align-items: flex-end; }
+  #input { flex: 1; resize: none; min-height: 44px; max-height: 200px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); padding: 8px; outline: none; }
+  #input:focus { box-shadow: 2px 2px 0 var(--pink); }
+  button.b { font: inherit; border: 2px solid var(--line); background: var(--paper); color: var(--ink); padding: 8px 12px; cursor: pointer; box-shadow: 2px 2px 0 var(--line); }
+  button.b:active { transform: translate(2px,2px); box-shadow: none; }
+  button.b.primary { background: var(--pink); color: #1e1e1e; }
+  button.b.rec { background: #c0392b; color: #fff; animation: blink 1s infinite; }
+  /* dialogs */
+  #overlay { position: fixed; inset: 0; background: rgba(30,30,30,.45); display: none; align-items: center; justify-content: center; z-index: 10; }
+  #overlay.show { display: flex; }
+  .dialog { width: min(680px, 92vw); max-height: 86vh; display: flex; flex-direction: column; }
+  .dialog .body { padding: 12px; overflow: auto; white-space: pre-wrap; }
+  .dialog .opts { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 12px; }
+  .dialog .opts button { text-align: left; }
+  .dialog input, .dialog textarea { width: 100%; font: inherit; padding: 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+  .dialog .row { display: flex; gap: 8px; justify-content: flex-end; padding: 0 12px 12px; }
+  .empty { color: var(--gray); padding: 40px; text-align: center; }
+  .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--line); }
+  .tabs button { flex: 1; font: inherit; background: var(--paper); color: var(--gray); border: 0; border-right: 1px solid var(--light); padding: 6px 0; cursor: pointer; text-transform: uppercase; font-size: 11px; letter-spacing: .06em; }
+  .tabs button:last-child { border-right: 0; }
+  .tabs button.on { background: var(--pink); color: #1e1e1e; font-weight: 700; }
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.on { display: flex; }
+  .pane { flex: 1; overflow: auto; padding: 12px 14px; }
+  .card { border: 1px solid var(--line); background: var(--tool-bg); padding: 8px 10px; margin-bottom: 8px; }
+  .card h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--gray); }
+  .form { display: grid; grid-template-columns: 150px 1fr; gap: 6px 10px; align-items: start; }
+  .form label { color: var(--gray); font-size: 12px; padding-top: 6px; }
+  .form input, .form textarea, .form select { width: 100%; font: inherit; font-size: 12px; padding: 5px 7px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+  .form textarea { min-height: 60px; resize: vertical; }
+  .form .full { grid-column: 1 / -1; }
+  .hint { font-size: 11px; color: var(--gray); }
+  .rowbtns { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  button.b.small { padding: 4px 8px; font-size: 12px; box-shadow: 1px 1px 0 var(--line); }
+  button.b.danger { border-color: #c0392b; color: #c0392b; }
+  .trig { display: grid; grid-template-columns: 90px 1fr auto; gap: 6px; align-items: center; margin: 4px 0; }
+  .trig code, .hook { font-size: 11px; word-break: break-all; background: var(--paper); border: 1px dashed var(--line); padding: 3px 6px; }
+  .runs { border: 1px solid var(--light); }
+  .run { display: grid; grid-template-columns: 78px 1fr auto; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--light); cursor: pointer; font-size: 12px; }
+  .run:hover { background: var(--reflex-bg); } .run.sel { background: var(--pink); color: #1e1e1e; }
+  .st { font-weight: 700; } .st.succeeded { color: var(--green); } .st.failed, .st.timeout { color: #c0392b; } .st.running, .st.queued { color: var(--magenta); } .run.sel .st { color: #1e1e1e; }
+  .agent-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: pointer; border: 1px solid transparent; }
+  .agent-item:hover { border-color: var(--line); } .agent-item.active { background: var(--pink); color: #1e1e1e; }
+  .agent-item .dot.off { background: var(--gray); } .agent-item .dot.on { background: var(--green); } .agent-item .dot.run { background: var(--pink); animation: blink 1s infinite; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; font-size: 12px; }
+  .kv span { min-width: 0; overflow-wrap: anywhere; }
+  .kv span:first-child { color: var(--gray); }
+  .ok { color: var(--green); } .bad { color: #c0392b; }
+  .chip { display: inline-block; border: 1px solid var(--line); padding: 0 6px; font-size: 11px; margin: 2px 4px 2px 0; }
+  .chip .x { margin-left: 6px; cursor: pointer; color: var(--gray); }
+  .mcp-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 6px; align-items: center; margin: 4px 0; font-size: 12px; }
+  pre.out { background: var(--paper); border: 1px solid var(--light); padding: 6px; font-size: 11px; max-height: 200px; overflow: auto; white-space: pre-wrap; }
+  .fs-h { font-size: 11px; color: var(--gray); text-transform: uppercase; letter-spacing: .06em; margin: 8px 0 4px; }
+  .fs-crumbs { padding: 4px 0; word-break: break-all; } .fs-crumbs a { color: var(--teal); text-decoration: none; } .fs-crumbs .sep { color: var(--gray); margin: 0 2px; }
+  .fs-list { max-height: 34vh; overflow: auto; border: 1px solid var(--light); }
+  .fs-item { display: flex; gap: 8px; padding: 4px 8px; cursor: pointer; border-bottom: 1px solid var(--light); }
+  .fs-item:hover { background: var(--reflex-bg); } .fs-item.recent { color: var(--ink); }
+  .fs-empty { padding: 8px; color: var(--gray); }
+  .git { font-size: 10px; border: 1px solid var(--green); color: var(--green); padding: 0 4px; margin-left: auto; }
+  #mFilter { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); margin-bottom: 6px; }
+  .mhead, .mrow { display: grid; grid-template-columns: 1fr 52px 64px 64px 22px; gap: 8px; align-items: center; }
+  .mhead { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--gray); padding: 2px 8px; }
+  .mlist { max-height: 56vh; overflow: auto; border: 1px solid var(--light); }
+  .mrow { padding: 3px 8px; cursor: pointer; border-bottom: 1px solid var(--light); font-size: 12px; }
+  .mrow span:nth-child(n+2) { text-align: right; color: var(--gray); }
+  .mrow:hover { background: var(--reflex-bg); } .mrow.cur { background: var(--pink); color: #1e1e1e; } .mrow.cur span { color: #1e1e1e; }
+  .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mprov { font-size: 10px; color: var(--gray); border: 1px solid var(--light); padding: 0 4px; margin-right: 6px; }
+  .mrow.cur .mprov { color: #1e1e1e; border-color: #1e1e1e; }
+  @media (max-width: 640px) {
+    .mhead { display: none; }
+    .mrow { grid-template-columns: 1fr auto auto auto auto; row-gap: 0; }
+    .mrow .mname { grid-column: 1 / -1; white-space: normal; word-break: break-all; }
+    .mrow span:nth-child(n+2) { font-size: 11px; }
+  }
+  .mflags { text-align: right; font-size: 10px; }
+  .dialog .opts button { padding: 6px 10px; }
+  .fs-path { margin-top: 8px; } .fs-path input { width: 100%; font: inherit; padding: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+  .kbd { border: 1px solid var(--gray); padding: 0 4px; font-size: 11px; }
+  @media (max-width: 760px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } #side { max-height: 30vh; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side" class="win">
+    <div class="titlebar"><span class="tag pink brand"><svg class="logo" viewBox="0 0 28 28" width="22" height="22" aria-hidden="true"><rect x="1.5" y="1.5" width="25" height="25" fill="#f386a1" stroke="#1e1e1e" stroke-width="3"/><path d="M15.5 4 L8 15.5 H14 L12.5 24 L20 12.5 H14 Z" fill="#1e1e1e"/></svg><span>Reflex</span></span><span class="spacer"></span><button class="btn" id="newBtn" title="New session (n)">+ new</button></div>
+    <div class="tabs"><button class="on" data-tab="sessions">Sessions</button><button data-tab="agents">Agents</button><button data-tab="settings">Settings</button></div>
+    <div class="body" id="sessions"></div>
+    <div class="body" id="agentsList" style="display:none"></div>
+    <div class="body" id="settingsNav" style="display:none"></div>
+    <div class="side-foot" id="foot">reflex web · sessions run as local processes</div>
+  </div>
+  <div id="main" class="win">
+    <div class="titlebar"><span class="tag" id="title">no session</span><span class="spacer"></span>
+      <button class="btn" id="modelBtn" title="Change model">model</button>
+      <button class="btn" id="abortBtn" title="Stop the agent (Esc)">stop</button>
+      <button class="btn" id="themeBtn" title="Toggle light/dark">◐</button>
+    </div>
+    <div class="view on" id="chatView">
+      <div id="chat"><div class="empty">Create a session to start.<br><br>Each session is a full Reflex agent: System One reflex layer, <code>/browse</code>, <code>/computer</code>, voice.</div></div>
+      <div id="status"></div>
+      <div id="composer">
+        <textarea id="input" placeholder="Ask, or type /reflex, /browse <goal>, /computer on … (Enter to send, Shift+Enter newline)"></textarea>
+        <button class="b" id="micBtn" title="Hold to talk, or click to toggle">🎤</button>
+        <button class="b primary" id="sendBtn">send</button>
+      </div>
+    </div>
+    <div class="view" id="agentView"><div class="pane" id="agentPane"><div class="empty">Agents are scheduled or webhook-driven Reflex jobs. Pick one on the left or create a new one.<br><br>You can also ask any Reflex session to build one: <i>"create an agent that runs the tests every weekday at 9 and posts a summary"</i>.</div></div></div>
+    <div class="view" id="settingsView"><div class="pane" id="settingsPane"></div></div>
+  </div>
+<div id="overlay"><div class="dialog win"><div class="titlebar"><span class="tag pink" id="dTitle">Reflex</span></div><div class="body" id="dBody"></div><div class="opts" id="dOpts"></div><div class="row" id="dRow"></div></div></div>
+<script>
+const TOKEN = "__REFLEX_TOKEN__";
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "x-reflex-token": TOKEN, ...(opts.headers || {}) } }).then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+const $ = s => document.querySelector(s);
+const state = { sessions: [], current: null, es: null, views: {}, config: {} };
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+function md(text) {
+  // small markdown: fences, inline code, bold, paragraphs
+  let out = "", parts = text.split(/```/);
+  parts.forEach((p, i) => { if (i % 2) { const nl = p.indexOf("\n"); out += `<pre>${esc(nl >= 0 ? p.slice(nl + 1) : p)}</pre>`; } else out += p.split(/\n{2,}/).map(par => `<p>${esc(par).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")}</p>`).join(""); });
+  return out;
+}
+
+// ── sessions ────────────────────────────────────────────────────────────
+async function refreshSessions() {
+  const data = await api("/api/sessions");
+  state.sessions = data.sessions; state.terminal = data.terminal || []; state.recent = data.recent || [];
+  const box = $("#sessions"); box.innerHTML = "";
+  const sec = (t) => { const d = document.createElement("div"); d.className = "sec"; d.textContent = t; box.appendChild(d); };
+  const short = (p) => p.replace("__REFLEX_HOME__", "~");
+  if (state.sessions.length) sec("Web sessions");
+  for (const s of state.sessions) {
+    const div = document.createElement("div");
+    div.className = "sess" + (state.current === "web:" + s.id ? " active" : "") + ((state.views["web:" + s.id]?.busy) ? " busy" : "");
+    div.innerHTML = `<span class="dot"></span><span>${esc(s.name)}</span><span class="x" title="close">✕</span>`;
+    div.title = s.cwd;
+    div.onclick = () => selectSession("web:" + s.id);
+    div.querySelector(".x").onclick = async (e) => { e.stopPropagation(); await api(`/api/sessions/${s.id}`, { method: "DELETE" }); delete state.views["web:" + s.id]; if (state.current === "web:" + s.id) state.current = null; refreshSessions(); render(); };
+    box.appendChild(div);
+  }
+  if (state.terminal.length) sec("Live in terminal");
+  for (const t of state.terminal) {
+    const div = document.createElement("div");
+    div.className = "sess term" + (state.current === "term:" + t.pid ? " active" : "");
+    div.innerHTML = `<span class="dot"></span><span>${esc(t.name)}</span><span class="meta">${esc(short(t.cwd).split("/").slice(-1)[0])}</span>`;
+    div.title = `${t.cwd}\npid ${t.pid} · ${t.model || ""}\nread-only mirror of the terminal`;
+    div.onclick = () => selectSession("term:" + t.pid);
+    box.appendChild(div);
+  }
+  if (state.recent.length) sec("Recent (resume here)");
+  for (const r of state.recent.slice(0, 12)) {
+    const div = document.createElement("div");
+    div.className = "sess recent";
+    div.innerHTML = `<span class="dot"></span><span>${esc(r.name)}</span><span class="meta">${esc(short(r.cwd).split("/").slice(-1)[0])}</span>`;
+    div.title = `${r.cwd}\n${new Date(r.modified).toLocaleString()} · ${r.messages} messages\nclick to resume in the web`;
+    div.onclick = async () => { try { const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sessionFile: r.path }), headers: { "Content-Type": "application/json" } }); await refreshSessions(); selectSession("web:" + s.id); } catch (e) { await askText("Could not resume", "", e.message); } };
+    box.appendChild(div);
+  }
+  if (!box.children.length) box.innerHTML = `<div class="empty" style="padding:20px">No sessions yet.<br>Press <b>+ new</b>, or start <code>reflex</code> in a terminal: it shows up here.</div>`;
+}
+function askText(title, placeholder, prefill) {
+  return new Promise(resolve => {
+    const o = $("#overlay"); o.classList.add("show");
+    $("#dTitle").textContent = title; $("#dBody").textContent = "";
+    const opts = $("#dOpts"), row = $("#dRow"); opts.innerHTML = ""; row.innerHTML = "";
+    const inp = document.createElement("input"); inp.placeholder = placeholder || ""; inp.value = prefill || ""; opts.appendChild(inp);
+    const ok = document.createElement("button"); ok.className = "b primary"; ok.textContent = "OK"; ok.onclick = () => { hideDialog(); resolve(inp.value); };
+    const c = document.createElement("button"); c.className = "b"; c.textContent = "Cancel"; c.onclick = () => { hideDialog(); resolve(null); };
+    row.append(c, ok); inp.onkeydown = e => { if (e.key === "Enter") ok.click(); if (e.key === "Escape") c.click(); }; setTimeout(() => { inp.focus(); inp.select(); }, 0);
+  });
+}
+async function newSession() {
+  const cwd = await pickFolder(); if (!cwd) return;
+  try {
+    const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ cwd }), headers: { "Content-Type": "application/json" } });
+    state.lastCwd = cwd; await refreshSessions(); selectSession("web:" + s.id);
+  } catch (e) { await askText("Could not create session", "", e.message); }
+}
+/** Folder browser: recent projects, then navigate directories; no typing required. */
+function pickFolder() {
+  return new Promise(async resolve => {
+    const o = $("#overlay"); o.classList.add("show");
+    $("#dTitle").textContent = "New session — choose a project folder"; $("#dBody").innerHTML = "";
+    const opts = $("#dOpts"), row = $("#dRow"); opts.innerHTML = ""; row.innerHTML = "";
+    const body = $("#dBody");
+    let recent = [], cur = null;
+    try { const r = await api("/api/recent"); recent = r.recent; cur = state.lastCwd || r.cwd || r.home; } catch (e) { cur = "~"; }
+    const done = v => { hideDialog(); resolve(v); };
+    async function show(path) {
+      let d; try { d = await api(`/api/fs?path=${encodeURIComponent(path)}`); } catch (e) { body.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; }
+      cur = d.path;
+      const crumbs = []; let acc = ""; for (const part of d.path.split("/").filter(Boolean)) { acc += "/" + part; crumbs.push(`<a href="#" data-p="${esc(acc)}">${esc(part)}</a>`); }
+      body.innerHTML = `
+        ${recent.length ? `<div class="fs-h">Recent projects</div><div class="fs-list">${recent.map(r => `<div class="fs-item recent" data-use="${esc(r.cwd)}"><span>⏱</span><span>${esc(r.cwd.replace(d.home, "~"))}</span></div>`).join("")}</div>` : ""}
+        <div class="fs-h">Browse</div>
+        <div class="fs-crumbs"><a href="#" data-p="/">/</a>${crumbs.join('<span class="sep">/</span>')}${d.git ? ' <span class="git">git</span>' : ""}</div>
+        <div class="fs-list">${d.parent ? `<div class="fs-item" data-p="${esc(d.parent)}"><span>↑</span><span>..</span></div>` : ""}${d.dirs.map(x => `<div class="fs-item" data-p="${esc(x.path)}"><span>▸</span><span>${esc(x.name)}</span>${x.git ? '<span class="git">git</span>' : ""}</div>`).join("") || '<div class="fs-empty">no subfolders</div>'}</div>
+        <div class="fs-path"><input id="fsPath" value="${esc(d.path)}" spellcheck="false"></div>`;
+      body.querySelectorAll("[data-p]").forEach(el => el.onclick = e => { e.preventDefault(); show(el.dataset.p); });
+      body.querySelectorAll("[data-use]").forEach(el => el.onclick = () => done(el.dataset.use));
+      const inp = body.querySelector("#fsPath"); inp.onkeydown = e => { if (e.key === "Enter") show(inp.value.trim()); if (e.key === "Escape") done(null); };
+      use.textContent = `Use ${d.path.replace(d.home, "~")}`;
+    }
+    const use = document.createElement("button"); use.className = "b primary"; use.onclick = () => done(cur);
+    const c = document.createElement("button"); c.className = "b"; c.textContent = "Cancel"; c.onclick = () => done(null);
+    row.append(c, use);
+    await show(cur);
+  });
+}
+function view(id) { return state.views[id] ||= { items: [], byTool: {}, streaming: null, busy: false, status: {}, model: null, pending: null, title: "", readonly: id.startsWith("term:") }; }
+function selectSession(id) {
+  state.current = id; const v = view(id);
+  if (state.es) state.es.close();
+  v.items = []; v.byTool = {}; v.streaming = null;
+  const url = id.startsWith("term:") ? `/api/terminal/${id.slice(5)}/events?token=${TOKEN}` : `/api/sessions/${id.slice(4)}/events?token=${TOKEN}`;
+  state.es = new EventSource(url);
+  state.es.onmessage = (m) => { try { handle(id, JSON.parse(m.data)); } catch (e) { console.warn(e); } };
+  state.es.onerror = () => { if (v.readonly) notice("warning", "no transcript available for this terminal session (started with --no-session?)"); };
+  if (!v.readonly) rpc({ type: "get_state" });
+  $("#input").disabled = !!v.readonly; $("#sendBtn").disabled = !!v.readonly; $("#micBtn").disabled = !!v.readonly;
+  $("#input").placeholder = v.readonly ? "Read-only mirror of a terminal session — type in that terminal" : "Ask, or type /reflex, /browse <goal>, /computer on … (Enter to send, Shift+Enter newline)";
+  refreshSessions(); render();
+}
+function rpc(cmd) { if (!state.current || state.current.startsWith("term:")) return; return api(`/api/sessions/${state.current.slice(4)}/rpc`, { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } }).catch(e => notice("error", e.message)); }
+
+// Session-file entries (terminal mirror) → the same view items as live RPC events.
+function handleEntry(v, entry) {
+  if (entry.type === "message" && entry.message) {
+    const m = entry.message;
+    if (m.role === "user") v.items.push({ kind: "user", text: contentText(m.content) });
+    else if (m.role === "assistant") {
+      const text = (m.content || []).filter(c => c.type === "text").map(c => c.text).join("");
+      if (text) v.items.push({ kind: "assistant", text });
+      for (const c of (m.content || [])) if (c.type === "toolCall") { const t = { kind: "tool", id: c.id, name: c.name, args: c.arguments, status: "run", out: "" }; v.byTool[c.id] = t; v.items.push(t); }
+    } else if (m.role === "toolResult") { const t = v.byTool[m.toolCallId]; if (t) { t.status = m.isError ? "err" : "ok"; t.out = resultText(m); t.images = (m.content || []).filter(c => c.type === "image"); } }
+    else if (m.role === "custom" && m.display) v.items.push({ kind: "reflex", text: contentText(m.content) });
+  } else if (entry.type === "custom" && entry.customType === "reflex-decision" && entry.data) v.items.push({ kind: "reflex", text: entry.data.summary });
+  else if (entry.type === "session" && entry.cwd) v.title = entry.cwd;
+}
+
+// ── events ──────────────────────────────────────────────────────────────
+function handle(id, ev) {
+  const v = view(id);
+  if (ev.type === "transcript_entry") { handleEntry(v, ev.entry); if (id === state.current) render(); return; }
+  switch (ev.type) {
+    case "replay_done": render(); return;
+    case "agent_start": v.busy = true; break;
+    case "agent_end": case "agent_settled": v.busy = false; v.streaming = null; break;
+    case "message_start":
+      if (ev.message?.role === "user") v.items.push({ kind: "user", text: contentText(ev.message.content) });
+      if (ev.message?.role === "assistant") v.streaming = { kind: "assistant", text: "", thinking: "" }, v.items.push(v.streaming);
+      if (ev.message?.role === "custom" && ev.message.display) v.items.push({ kind: "reflex", text: contentText(ev.message.content) });
+      break;
+    case "message_update": {
+      const e = ev.assistantMessageEvent; if (!v.streaming) break;
+      if (e.type === "text_delta") v.streaming.text += e.delta;
+      if (e.type === "thinking_delta") v.streaming.thinking += e.delta;
+      break;
+    }
+    case "message_end":
+      if (ev.message?.role === "assistant" && v.streaming) { v.streaming.text = contentText(ev.message.content); v.streaming = null; }
+      break;
+    case "tool_execution_start": { const t = { kind: "tool", id: ev.toolCallId, name: ev.toolName, args: ev.args, status: "run", out: "" }; v.byTool[ev.toolCallId] = t; v.items.push(t); break; }
+    case "tool_execution_update": { const t = v.byTool[ev.toolCallId]; if (t) t.out = resultText(ev.partialResult); break; }
+    case "tool_execution_end": { const t = v.byTool[ev.toolCallId]; if (t) { t.status = ev.isError ? "err" : "ok"; t.out = resultText(ev.result); t.images = (ev.result?.content || []).filter(c => c.type === "image"); } break; }
+    case "extension_ui_request":
+      if (ev.method === "notify") notice(ev.notificationType || "info", ev.message);
+      else if (ev.method === "setStatus") { if (ev.text == null) delete v.status[ev.key]; else v.status[ev.key] = stripAnsi(ev.text); }
+      else if (ev.method === "setTitle") v.title = ev.title;
+      else if (ev.method === "setWidget") { if (ev.content) v.items.push({ kind: "reflex", text: (Array.isArray(ev.content) ? ev.content : [String(ev.content)]).map(stripAnsi).join("\n") }); }
+      else if (ev.method === "set_editor_text") $("#input").value = ev.text || "";
+      else if (["select", "confirm", "input", "editor"].includes(ev.method)) { v.pending = ev; if (id === state.current) showDialog(ev); }
+      break;
+    case "extension_ui_response": v.pending = null; hideDialog(); break;
+    case "response":
+      if (ev.command === "get_state" && ev.success) { v.model = ev.data.model; v.busy = ev.data.isStreaming; }
+      if (ev.command === "get_available_models" && ev.success) pickModel(ev.data.models);
+      if (ev.command === "set_model" && ev.success) { v.model = ev.data; notice("info", `model: ${ev.data.provider}/${ev.data.id}`); }
+      if (ev.success === false) notice("error", ev.error || `${ev.command} failed`);
+      break;
+    case "session_exit": v.busy = false; notice("error", `session process exited (code ${ev.code})`); break;
+    case "stderr": if (/error/i.test(ev.text)) notice("error", ev.text.trim().slice(0, 300)); break;
+  }
+  if (id === state.current) render();
+}
+const stripAnsi = s => String(s).replace(/\x1b\[[0-9;]*m/g, "");
+const contentText = c => typeof c === "string" ? c : (c || []).map(x => x.type === "text" ? x.text : x.type === "image" ? "[image]" : "").join("");
+const resultText = r => (r?.content || []).map(x => x.type === "text" ? x.text : "").join("\n");
+
+// ── render ──────────────────────────────────────────────────────────────
+let raf = 0;
+function render() { cancelAnimationFrame(raf); raf = requestAnimationFrame(paint); }
+function paint() {
+  const id = state.current, v = id ? view(id) : null, chat = $("#chat");
+  const s = id && id.startsWith("web:") ? state.sessions.find(x => "web:" + x.id === id) : id ? state.terminal.find(x => "term:" + x.pid === id) : null;
+  if (state.tab === "sessions") { $("#title").textContent = s ? `${s.name} · ${s.cwd.replace("__REFLEX_HOME__", "~")}${id.startsWith("term:") ? " · live in terminal (read-only)" : ""}` : "no session"; $("#title").title = s ? s.cwd : ""; }
+  document.querySelectorAll(".sess").forEach(el => el.classList.toggle("busy", !!(v && v.busy && el.classList.contains("active"))));
+  if (!v) return;
+  const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 60;
+  const html = v.items.map(it => {
+    if (it.kind === "user") return `<div class="msg user">${esc(it.text)}</div>`;
+    if (it.kind === "assistant") return (it.thinking ? `<div class="msg thinking">${esc(it.thinking.slice(-600))}</div>` : "") + `<div class="msg assistant md">${md(it.text)}${v.streaming === it ? "▌" : ""}</div>`;
+    if (it.kind === "reflex") return `<div class="reflex"><b>⚡</b> ${esc(it.text)}</div>`;
+    if (it.kind === "tool") { const a = it.args || {}; const arg = a.command || a.path || a.goal || a.action || a.pattern || JSON.stringify(a); return `<div class="tool ${it.status}${it.open ? " open" : ""}" data-id="${it.id}"><div class="head"><span class="name">${esc(it.name)}</span><span class="arg">${esc(String(arg))}</span><span>${it.status === "run" ? "…" : it.status === "ok" ? "✓" : "✗"}</span></div><div class="out">${esc(it.out || "")}${(it.images || []).map(i => `<img src="data:${i.mimeType};base64,${i.data}">`).join("")}</div></div>`; }
+    return "";
+  }).join("");
+  chat.innerHTML = html || `<div class="empty">Say something.</div>`;
+  chat.querySelectorAll(".tool .head").forEach(h => h.onclick = () => { const t = v.items.find(x => x.id === h.parentElement.dataset.id); if (t) { t.open = !t.open; render(); } });
+  if (atBottom) chat.scrollTop = chat.scrollHeight;
+  const model = v.model ? `${v.model.provider}/${v.model.id}` : "";
+  $("#status").innerHTML = [model && `<span><span class="k">model</span> ${esc(model)}</span>`, ...Object.values(v.status).map(t => `<span>${esc(t)}</span>`), v.busy ? `<span class="k">working…</span>` : ""].filter(Boolean).join("");
+  $("#abortBtn").style.visibility = v.busy ? "visible" : "hidden";
+}
+function notice(type, text) { const id = state.current; if (!id) return; view(id).items.push({ kind: "notice", text, type }); const chat = $("#chat"); const d = document.createElement("div"); d.className = `notice ${type}`; d.textContent = text; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; setTimeout(() => d.remove(), 12000); }
+
+// ── dialogs (extension UI: reflex gate, browse confirm, …) ───────────────
+function showDialog(ev) {
+  const o = $("#overlay"); o.classList.add("show");
+  $("#dTitle").textContent = ev.method === "confirm" ? "Confirm" : ev.method === "select" ? "Choose" : "Input";
+  $("#dBody").textContent = stripAnsi([ev.title, ev.message].filter(Boolean).join("\n\n"));
+  const opts = $("#dOpts"), row = $("#dRow"); opts.innerHTML = ""; row.innerHTML = "";
+  const answer = (body) => { rpc({ type: "extension_ui_response", id: ev.id, ...body }); hideDialog(); };
+  if (ev.method === "select") (ev.options || []).forEach(opt => { const b = document.createElement("button"); b.className = "b"; b.textContent = opt; b.onclick = () => answer({ value: opt }); opts.appendChild(b); });
+  if (ev.method === "confirm") { const y = document.createElement("button"); y.className = "b primary"; y.textContent = "Yes"; y.onclick = () => answer({ confirmed: true }); const n = document.createElement("button"); n.className = "b"; n.textContent = "No"; n.onclick = () => answer({ confirmed: false }); row.append(n, y); }
+  if (ev.method === "input" || ev.method === "editor") { const inp = document.createElement(ev.method === "editor" ? "textarea" : "input"); inp.placeholder = ev.placeholder || ""; inp.value = ev.prefill || ""; opts.appendChild(inp); inp.focus(); const ok = document.createElement("button"); ok.className = "b primary"; ok.textContent = "OK"; ok.onclick = () => answer({ value: inp.value }); const c = document.createElement("button"); c.className = "b"; c.textContent = "Cancel"; c.onclick = () => answer({ cancelled: true }); row.append(c, ok); inp.onkeydown = e => { if (e.key === "Enter" && ev.method === "input") ok.click(); }; }
+  const c2 = document.createElement("button"); c2.className = "b"; c2.textContent = "Dismiss"; c2.onclick = () => answer({ cancelled: true }); if (ev.method === "select") row.appendChild(c2);
+}
+function hideDialog() { $("#overlay").classList.remove("show"); }
+
+// ── model picker ────────────────────────────────────────────────────────
+function pickModel(models) {
+  const price = n => n === 0 ? "free" : n < 0 ? "varies" : `$${n < 1 ? n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "") : n.toFixed(2)}`;
+  const ctx = n => n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : `${Math.round(n / 1000)}k`;
+  const v = state.current ? view(state.current) : null;
+  const cur = v?.model ? `${v.model.provider}/${v.model.id}` : "";
+  const rows = models.map(m => ({ m, ref: `${m.provider}/${m.id}`, search: `${m.provider}/${m.id} ${m.name || ""}`.toLowerCase() }))
+    .sort((a, b) => (a.ref === cur ? -1 : b.ref === cur ? 1 : 0) || a.m.provider.localeCompare(b.m.provider) || a.m.cost.input - b.m.cost.input || a.ref.localeCompare(b.ref));
+  const o = $("#overlay"); o.classList.add("show");
+  $("#dTitle").textContent = "Model";
+  $("#dBody").innerHTML = `<input id="mFilter" placeholder="filter: claude, gpt-5, deepseek, :free …" spellcheck="false">
+    <div class="mhead"><span>model</span><span>ctx</span><span>$in</span><span>$out</span><span></span></div>
+    <div class="mlist" id="mList"></div>`;
+  const opts = $("#dOpts"), row = $("#dRow"); opts.innerHTML = ""; row.innerHTML = "";
+  const list = $("#mList"), filter = $("#mFilter");
+  const draw = () => {
+    const q = filter.value.trim().toLowerCase();
+    const shown = rows.filter(r => !q || r.search.includes(q)).slice(0, 300);
+    list.innerHTML = shown.map(r => `<div class="mrow${r.ref === cur ? " cur" : ""}" data-ref="${esc(r.ref)}"><span class="mname"><span class="mprov">${esc(r.m.provider)}</span>${esc(r.m.id)}</span><span>${ctx(r.m.contextWindow)}</span><span>${price(r.m.cost.input)}</span><span>${price(r.m.cost.output)}</span><span class="mflags">${r.m.reasoning ? "R" : ""}${(r.m.input || []).includes("image") ? "I" : ""}</span></div>`).join("") || `<div class="fs-empty">no match</div>`;
+    list.querySelectorAll(".mrow").forEach(el => el.onclick = () => { const r = rows.find(x => x.ref === el.dataset.ref); hideDialog(); rpc({ type: "set_model", provider: r.m.provider, modelId: r.m.id }); });
+  };
+  filter.oninput = draw; filter.onkeydown = e => { if (e.key === "Escape") hideDialog(); if (e.key === "Enter") { const first = list.querySelector(".mrow"); if (first) first.click(); } };
+  draw(); setTimeout(() => filter.focus(), 0);
+  const c = document.createElement("button"); c.className = "b"; c.textContent = "Cancel"; c.onclick = hideDialog; row.appendChild(c);
+}
+
+// ── composer + voice ────────────────────────────────────────────────────
+async function sendInput() {
+  const text = $("#input").value.trim(); if (!text || !state.current) return;
+  $("#input").value = "";
+  const v = view(state.current);
+  await rpc(v.busy ? { type: "prompt", message: text, streamingBehavior: "steer" } : { type: "prompt", message: text });
+}
+$("#sendBtn").onclick = sendInput;
+$("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendInput(); } });
+$("#newBtn").onclick = () => { if (state.tab === "agents") { state.agent = null; state.editing = true; renderAgent(); $("#title").textContent = "new agent"; } else newSession(); };
+$("#abortBtn").onclick = () => rpc({ type: "abort" });
+$("#modelBtn").onclick = () => rpc({ type: "get_available_models" });
+$("#themeBtn").onclick = () => { const r = document.documentElement; const cur = r.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); r.dataset.theme = cur === "dark" ? "light" : "dark"; try { localStorage.setItem("reflex-theme", r.dataset.theme); } catch {} };
+try { const t = localStorage.getItem("reflex-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#overlay").classList.contains("show")) rpc({ type: "abort" }); });
+
+let rec = null, chunks = [];
+async function toggleMic() {
+  if (rec) { rec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    rec = new MediaRecorder(stream, { mimeType: mime }); chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      $("#micBtn").classList.remove("rec"); $("#micBtn").textContent = "…";
+      try {
+        const blob = new Blob(chunks, { type: mime });
+        const r = await fetch("/api/transcribe", { method: "POST", headers: { "x-reflex-token": TOKEN, "Content-Type": mime }, body: blob });
+        const j = await r.json(); if (!r.ok) throw new Error(j.error || "transcription failed");
+        const inp = $("#input"); inp.value = (inp.value ? inp.value.trimEnd() + " " : "") + j.text; inp.focus();
+        notice("info", `🎤 ${j.provider}${j.language ? " · " + j.language : ""} · ${j.latencyMs}ms — review and press Enter`);
+      } catch (e) { notice("error", e.message); }
+      finally { $("#micBtn").textContent = "🎤"; rec = null; }
+    };
+    rec.start(); $("#micBtn").classList.add("rec"); $("#micBtn").textContent = "■";
+  } catch (e) { notice("error", "microphone: " + e.message); }
+}
+$("#micBtn").onclick = toggleMic;
+
+// ── tabs ────────────────────────────────────────────────────────────────
+state.tab = "sessions"; state.agents = []; state.agent = null; state.runEs = null; state.settings = null;
+function setTab(t) {
+  state.tab = t;
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  $("#sessions").style.display = t === "sessions" ? "" : "none";
+  $("#agentsList").style.display = t === "agents" ? "" : "none";
+  $("#settingsNav").style.display = t === "settings" ? "" : "none";
+  $("#chatView").classList.toggle("on", t === "sessions"); $("#agentView").classList.toggle("on", t === "agents"); $("#settingsView").classList.toggle("on", t === "settings");
+  $("#modelBtn").style.display = t === "sessions" ? "" : "none"; $("#abortBtn").style.display = t === "sessions" ? "" : "none";
+  $("#newBtn").textContent = t === "agents" ? "+ agent" : "+ new"; $("#newBtn").style.visibility = t === "settings" ? "hidden" : "visible";
+  if (t === "agents") { refreshAgents(); $("#title").textContent = state.agent ? state.agent.name : "agents"; }
+  if (t === "settings") { loadSettings(); $("#title").textContent = "settings"; }
+  if (t === "sessions") render();
+}
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => setTab(b.dataset.tab));
+
+// ── agents ───────────────────────────────────────────────────────────────
+async function refreshAgents() {
+  const { agents } = await api("/api/agents"); state.agents = agents;
+  const box = $("#agentsList"); box.innerHTML = "";
+  for (const a of agents) {
+    const div = document.createElement("div");
+    div.className = "agent-item" + (state.agent?.id === a.id ? " active" : "");
+    const dot = a.running ? "run" : a.enabled ? "on" : "off";
+    const trig = a.triggers.filter(t => t.type !== "manual").map(t => t.type === "cron" ? "⏰" : "🔗").join("") || "▶";
+    div.innerHTML = `<span class="dot ${dot}"></span><span>${esc(a.name)}</span><span class="meta">${trig}${a.lastRun ? " · " + a.lastRun.status : ""}</span>`;
+    div.title = `${a.description || ""}\n${a.cwd}`;
+    div.onclick = () => openAgent(a.id);
+    box.appendChild(div);
+  }
+  if (!agents.length) box.innerHTML = `<div class="empty" style="padding:20px">No agents yet.<br>Press <b>+ agent</b>.</div>`;
+}
+async function openAgent(id, runId) {
+  const data = await api(`/api/agents/${id}`); state.agent = data.agent; state.agentRuns = data.runs; state.agentLive = data.live;
+  $("#title").textContent = state.agent.name;
+  refreshAgents(); renderAgent(runId);
+}
+function agentForm(a) {
+  a = a || { name: "", description: "", cwd: state.lastCwd || "__REFLEX_HOME__", prompt: "", instructions: "", model: "", reflex: "balanced", tools: [], computer: false, timeoutMinutes: 30, triggers: [{ type: "manual" }], chain: [], enabled: true };
+  const triggers = a.triggers.filter(t => t.type !== "manual");
+  const others = state.agents.filter(x => x.id !== a.id);
+  return `<div class="card"><h3>${a.id ? "Edit agent" : "New agent"}</h3><div class="form" id="aForm">
+    <label>name</label><input name="name" value="${esc(a.name)}" placeholder="Nightly test report">
+    <label>description</label><input name="description" value="${esc(a.description || "")}">
+    <label>folder</label><div style="display:flex;gap:6px"><input name="cwd" value="${esc(a.cwd)}"><button class="b small" id="aPick">browse…</button></div>
+    <label>prompt</label><textarea name="prompt" placeholder="What to do each run. {{input}} = trigger payload, {{now}} = timestamp">${esc(a.prompt)}</textarea>
+    <label>instructions</label><textarea name="instructions" placeholder="Standing rules appended to the system prompt (paths, formats, what never to do)">${esc(a.instructions || "")}</textarea>
+    <label>model</label><input name="model" value="${esc(a.model || "")}" placeholder="default · e.g. openrouter/anthropic/claude-sonnet-4.6">
+    <label>reflex</label><select name="reflex">${["cautious","balanced","bold","off"].map(v => `<option ${a.reflex === v ? "selected" : ""}>${v}</option>`).join("")}</select>
+    <label>tools</label><input name="tools" value="${esc((a.tools || []).join(", "))}" placeholder="empty = all · read, grep, find, ls = read-only · plus bash, edit, write, browse, computer">
+    <label>computer</label><label style="padding:0"><input type="checkbox" name="computer" ${a.computer ? "checked" : ""} style="width:auto"> macOS computer-use tools</label>
+    <label>timeout (min)</label><input name="timeoutMinutes" type="number" value="${a.timeoutMinutes || 30}" style="width:90px">
+    <div class="full"><div class="hint">Triggers · manual is always available</div><div id="aTrig">${triggers.map((t, i) => trigRow(t, i)).join("")}</div>
+      <div class="rowbtns"><button class="b small" id="addCron">+ cron</button><button class="b small" id="addHook">+ webhook</button></div></div>
+    <div class="full"><div class="hint">Chain · on success, run these agents with {{output}}</div><div id="aChain">${(a.chain || []).map((c, i) => chainRow(c, i, others)).join("")}</div>
+      <div class="rowbtns"><button class="b small" id="addChain" ${others.length ? "" : "disabled"}>+ next agent</button></div></div>
+  </div><div class="rowbtns"><button class="b primary" id="aSave">save</button>${a.id ? `<button class="b" id="aCancel">cancel</button>` : ""}</div></div>`;
+}
+const trigRow = (t, i) => t.type === "cron"
+  ? `<div class="trig" data-i="${i}" data-type="cron"><span>⏰ cron</span><div><input class="tSched" value="${esc(t.schedule || "")}" placeholder="0 9 * * 1-5  ·  @daily  ·  */30 * * * *"><input class="tInput" value="${esc(t.input || "")}" placeholder="input passed as {{input}} (optional)" style="margin-top:4px"></div><button class="b small tDel">✕</button></div>`
+  : `<div class="trig" data-i="${i}" data-type="webhook"><span>🔗 webhook</span><div><code>${t.secret ? `POST http://127.0.0.1:${location.port}/hooks/${esc(state.agent?.id || "<id>")}/${esc(t.secret)}` : "URL generated on save"}</code><input type="hidden" class="tSecret" value="${esc(t.secret || "")}"></div><button class="b small tDel">✕</button></div>`;
+const chainRow = (c, i, others) => `<div class="trig" data-i="${i}"><select class="cAgent">${others.map(o => `<option value="${o.id}" ${c.agentId === o.id ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select><input class="cInput" value="${esc(c.input || "{{output}}")}" placeholder="{{output}}"><button class="b small cDel">✕</button></div>`;
+function readAgentForm() {
+  const f = $("#aForm"); const g = n => f.querySelector(`[name=${n}]`);
+  const triggers = [{ type: "manual" }];
+  f.querySelectorAll("#aTrig .trig").forEach(el => { if (el.dataset.type === "cron") triggers.push({ type: "cron", schedule: el.querySelector(".tSched").value.trim(), input: el.querySelector(".tInput").value }); else triggers.push({ type: "webhook", secret: el.querySelector(".tSecret").value }); });
+  const chain = [...f.querySelectorAll("#aChain .trig")].map(el => ({ agentId: el.querySelector(".cAgent").value, input: el.querySelector(".cInput").value }));
+  return { id: state.agent?.id, name: g("name").value.trim(), description: g("description").value.trim(), cwd: g("cwd").value.trim(), prompt: g("prompt").value, instructions: g("instructions").value, model: g("model").value.trim() || undefined, reflex: g("reflex").value, tools: g("tools").value.split(",").map(x => x.trim()).filter(Boolean), computer: g("computer").checked, timeoutMinutes: Number(g("timeoutMinutes").value) || 30, triggers, chain, enabled: state.agent?.enabled ?? true };
+}
+function wireAgentForm(editing) {
+  const others = state.agents.filter(x => x.id !== state.agent?.id);
+  $("#aPick").onclick = async (e) => { e.preventDefault(); const cwd = await pickFolder(); if (cwd) $("#aForm [name=cwd]").value = cwd; };
+  const rewire = () => { document.querySelectorAll("#aTrig .tDel").forEach(b => b.onclick = e => { e.preventDefault(); b.closest(".trig").remove(); }); document.querySelectorAll("#aChain .cDel").forEach(b => b.onclick = e => { e.preventDefault(); b.closest(".trig").remove(); }); };
+  $("#addCron").onclick = e => { e.preventDefault(); $("#aTrig").insertAdjacentHTML("beforeend", trigRow({ type: "cron", schedule: "@daily" }, Date.now())); rewire(); };
+  $("#addHook").onclick = e => { e.preventDefault(); $("#aTrig").insertAdjacentHTML("beforeend", trigRow({ type: "webhook", secret: "" }, Date.now())); rewire(); };
+  $("#addChain").onclick = e => { e.preventDefault(); $("#aChain").insertAdjacentHTML("beforeend", chainRow({ agentId: others[0]?.id, input: "{{output}}" }, Date.now(), others)); rewire(); };
+  rewire();
+  $("#aSave").onclick = async () => { try { const { agent } = await api("/api/agents", { method: "POST", body: JSON.stringify(readAgentForm()), headers: { "Content-Type": "application/json" } }); state.editing = false; await openAgent(agent.id); } catch (e) { await askText("Could not save", "", e.message); } };
+  if (editing) $("#aCancel").onclick = () => { state.editing = false; renderAgent(); };
+}
+function renderAgent(runId) {
+  const a = state.agent, pane = $("#agentPane");
+  if (state.editing || !a) { pane.innerHTML = agentForm(state.editing && a ? a : null); wireAgentForm(!!(state.editing && a)); return; }
+  const trig = a.triggers.filter(t => t.type !== "manual");
+  const triggersHtml = trig.length ? trig.map(t => t.type === "cron" ? `<div>⏰ <b>${esc(t.schedule)}</b> <span class="hint">${esc(t.input || "")}</span></div>` : `<div>🔗 <span class="hook">POST http://127.0.0.1:${location.port}/hooks/${a.id}/${esc(t.secret)}</span> <span class="hint">JSON {"input": …} or text</span></div>`).join("") : `<span class="hint">manual only</span>`;
+  const runs = state.agentRuns || [];
+  pane.innerHTML = `<div class="card"><h3>${esc(a.name)} ${a.enabled ? '<span class="ok">enabled</span>' : '<span class="bad">disabled</span>'}</h3>
+    <div class="kv"><span>id</span><span>${a.id}</span><span>folder</span><span>${esc(a.cwd)}</span><span>model</span><span>${esc(a.model || "default")}</span><span>reflex</span><span>${a.reflex || "balanced"}</span><span>tools</span><span>${(a.tools || []).join(", ") || "all"}${a.computer ? " + computer" : ""}</span><span>prompt</span><span style="white-space:pre-wrap">${esc(a.prompt)}</span>${a.instructions ? `<span>instructions</span><span style="white-space:pre-wrap">${esc(a.instructions)}</span>` : ""}<span>triggers</span><span>${triggersHtml}</span>${(a.chain || []).length ? `<span>chain</span><span>${a.chain.map(c => `→ ${esc(c.agentId)}`).join(" ")}</span>` : ""}</div>
+    <div class="rowbtns"><button class="b primary small" id="aRun">▶ run now</button><button class="b small" id="aEdit">edit</button><button class="b small" id="aToggle">${a.enabled ? "disable" : "enable"}</button><button class="b small danger" id="aDelete">delete</button></div></div>
+    <div class="card"><h3>Runs (${runs.length})</h3><div class="runs">${runs.length ? runs.map(r => `<div class="run${r.id === runId ? " sel" : ""}" data-run="${r.id}"><span class="st ${r.status}">${r.status}</span><span>${new Date(r.startedAt).toLocaleString()} · ${r.trigger.type}${r.trigger.from ? " ← " + esc(r.trigger.from) : ""}${r.output ? " · " + esc(r.output.split("\n")[0].slice(0, 70)) : r.error ? " · " + esc(r.error.slice(0, 70)) : ""}</span><span class="hint">${r.toolCalls} tools${r.reflexBlocks ? " · " + r.reflexBlocks + " blocked" : ""}${r.endedAt ? " · " + Math.round((r.endedAt - r.startedAt) / 1000) + "s" : ""}</span></div>`).join("") : `<div class="fs-empty">no runs yet</div>`}</div></div>
+    <div class="card" id="runCard" style="display:none"><h3 id="runTitle">run</h3><div class="rowbtns"><button class="b small" id="runCancel">cancel run</button></div><div id="runChat" style="display:flex;flex-direction:column;gap:6px"></div></div>`;
+  $("#aRun").onclick = async () => { const input = await askText(`Run ${a.name}`, "input for {{input}} (optional)", ""); if (input === null) return; const { runId } = await api(`/api/agents/${a.id}/run`, { method: "POST", body: JSON.stringify({ input }), headers: { "Content-Type": "application/json" } }); setTimeout(() => openAgent(a.id, runId), 400); };
+  $("#aEdit").onclick = () => { state.editing = true; renderAgent(); };
+  $("#aToggle").onclick = async () => { await api(`/api/agents/${a.id}/toggle`, { method: "POST" }); openAgent(a.id); };
+  $("#aDelete").onclick = async () => { const ok = await askText(`Delete agent "${a.name}"?`, "type the agent id to confirm", ""); if (ok !== a.id) return; await api(`/api/agents/${a.id}`, { method: "DELETE" }); state.agent = null; refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; };
+  pane.querySelectorAll(".run").forEach(el => el.onclick = () => openRun(a.id, el.dataset.run));
+  if (runId) openRun(a.id, runId);
+}
+function openRun(agentId, runId) {
+  if (state.runEs) state.runEs.close();
+  document.querySelectorAll(".run").forEach(el => el.classList.toggle("sel", el.dataset.run === runId));
+  const card = $("#runCard"); card.style.display = ""; $("#runTitle").textContent = `run ${runId}`; $("#runChat").innerHTML = "";
+  const key = `run:${agentId}/${runId}`; const v = view(key); v.items = []; v.byTool = {}; v.streaming = null; v.readonly = true;
+  $("#runCancel").onclick = () => api(`/api/agents/${agentId}/runs/${runId}/cancel`, { method: "POST" });
+  state.runEs = new EventSource(`/api/agents/${agentId}/runs/${runId}/events?token=${TOKEN}`);
+  state.runEs.onmessage = (m) => { const ev = JSON.parse(m.data);
+    if (ev.type === "run_start") v.items.push({ kind: "reflex", text: `▶ ${ev.run.trigger.type}${ev.run.input ? " · input: " + ev.run.input.slice(0, 200) : ""}\nprompt: ${ev.run.prompt.slice(0, 300)}` });
+    else if (ev.type === "run_end") { v.items.push({ kind: "reflex", text: `■ ${ev.run.status} · ${ev.run.toolCalls} tools · ${ev.run.reflexBlocks} reflex blocks · ${Math.round(ev.run.durationMs / 1000)}s${ev.run.error ? "\n" + ev.run.error : ""}` }); state.runEs.close(); $("#runCancel").style.display = "none"; setTimeout(() => openAgent(agentId, runId), 300); return; }
+    else if (ev.type === "run_closed") { $("#runCancel").style.display = "none"; }
+    else if (ev.type === "replay_done") {}
+    else handle(key, ev);
+    paintRun(v); };
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function paintRun(v) {
+  const box = $("#runChat"); if (!box) return;
+  box.innerHTML = v.items.map(it => {
+    if (it.kind === "user") return `<div class="msg user">${esc(it.text)}</div>`;
+    if (it.kind === "assistant") return `<div class="msg assistant md">${md(it.text)}</div>`;
+    if (it.kind === "reflex") return `<div class="reflex"><b>⚡</b> ${esc(it.text)}</div>`;
+    if (it.kind === "tool") { const a = it.args || {}; const arg = a.command || a.path || a.goal || a.action || JSON.stringify(a); return `<div class="tool ${it.status}${it.open ? " open" : ""}" data-id="${it.id}"><div class="head"><span class="name">${esc(it.name)}</span><span class="arg">${esc(String(arg))}</span><span>${it.status === "run" ? "…" : it.status === "ok" ? "✓" : "✗"}</span></div><div class="out">${esc(it.out || "")}</div></div>`; }
+    return ""; }).join("");
+  box.querySelectorAll(".tool .head").forEach(h => h.onclick = () => { const t = v.items.find(x => x.id === h.parentElement.dataset.id); if (t) { t.open = !t.open; paintRun(v); } });
+}
+
+// ── settings ─────────────────────────────────────────────────────────────
+async function loadSettings() {
+  const d = await api("/api/settings"); state.settings = d; const c = d.config;
+  const nav = $("#settingsNav"); nav.innerHTML = ["keys", "reflex", "voice", "browser", "look", "packages", "skills", "connectors"].map(k => `<div class="sess" data-k="${k}">${k}</div>`).join("");
+  nav.querySelectorAll(".sess").forEach(el => el.onclick = () => document.getElementById("s-" + el.dataset.k)?.scrollIntoView({ behavior: "smooth" }));
+  const keyRow = (k, label) => `<label>${label}</label><div><input type="password" data-key="${k}" placeholder="${d.keys[k] ? "set (" + d.keys[k] + ") — paste to replace" : "not set · env " + d.env[k]}"></div>`;
+  const opt = (name, cur, vals) => `<select data-cfg="${name}">${vals.map(v => `<option ${String(cur) === String(v) ? "selected" : ""}>${v}</option>`).join("")}</select>`;
+  $("#settingsPane").innerHTML = `
+    <div class="card" id="s-keys"><h3>Keys</h3><div class="form">${keyRow("typesafe", "TypeSafe")}${keyRow("sarvam", "Sarvam")}${keyRow("openai", "OpenAI (voice)")}${keyRow("groq", "Groq (voice)")}${keyRow("deepgram", "Deepgram")}</div><div class="hint">LLM provider keys are managed by Pi: run <code>reflex setup</code> or <code>/login</code> in a session. Keys here are stored 0600 in ~/.reflex/keys.json; env vars win.</div></div>
+    <div class="card" id="s-reflex"><h3>Reflex layer (System One)</h3><div class="form">
+      <label>enabled</label>${opt("reflex.enabled", c.reflex.enabled, [true, false])}<label>appetite</label>${opt("reflex.riskAppetite", c.reflex.riskAppetite, ["cautious", "balanced", "bold"])}
+      <label>gate tool calls</label>${opt("reflex.gateToolCalls", c.reflex.gateToolCalls, [true, false])}<label>monitor progress</label>${opt("reflex.monitorProgress", c.reflex.monitorProgress, [true, false])}
+      <label>route models</label>${opt("reflex.routeModels", c.reflex.routeModels, [true, false])}<label>classify voice</label>${opt("reflex.classifyVoice", c.reflex.classifyVoice, [true, false])}<label>verbose decisions</label>${opt("reflex.verbose", c.reflex.verbose, [true, false])}
+      <label>routing fast</label><input data-cfg="reflex.routing.fast" value="${esc(c.reflex.routing.fast || "")}" placeholder="openrouter/google/gemini-3.1-flash-lite-preview"><label>routing default</label><input data-cfg="reflex.routing.default" value="${esc(c.reflex.routing.default || "")}"><label>routing strong</label><input data-cfg="reflex.routing.strong" value="${esc(c.reflex.routing.strong || "")}">
+      <label>protected paths</label><input data-cfg="reflex.protectedPaths" value="${esc(c.reflex.protectedPaths.join(", "))}"></div></div>
+    <div class="card" id="s-voice"><h3>Voice</h3><div class="form"><label>provider</label>${opt("voice.provider", c.voice.provider, ["sarvam", "openai", "groq", "deepgram", "whisper-cpp", "none"])}<label>language</label><input data-cfg="voice.language" value="${esc(c.voice.language)}" placeholder="unknown · en-IN · hi-IN"><label>translate to English</label>${opt("voice.translateToEnglish", c.voice.translateToEnglish, [false, true])}<label>shortcut (TUI)</label><input data-cfg="voice.shortcut" value="${esc(c.voice.shortcut)}"></div></div>
+    <div class="card" id="s-browser"><h3>Browser agent</h3><div class="form"><label>headless</label>${opt("browser.headless", c.browser.headless, [false, true])}<label>attach to Chrome</label><input data-cfg="browser.attachUrl" value="${esc(c.browser.attachUrl || "")}" placeholder="http://127.0.0.1:9222 (your own Chrome with --remote-debugging-port)"><label>text model</label><input data-cfg="browser.textModel" value="${esc(c.browser.textModel || "")}" placeholder="default: session model"><label>max steps</label><input data-cfg="browser.maxSteps" type="number" value="${c.browser.maxSteps}" style="width:90px"></div></div>
+    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light"])}<label>default model</label><input data-cfg="llm.model" value="${esc(c.llm.model || "")}"><label>provider</label><input data-cfg="llm.provider" value="${esc(c.llm.provider || "")}"></div></div>
+    <div class="rowbtns"><button class="b primary" id="sSave">save settings</button><span class="hint" id="sMsg">new terminal sessions pick these up; web sessions after a new tab</span></div>
+    <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3><div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
+      <div class="rowbtns"><input id="pkgSrc" placeholder="npm:@scope/pkg  ·  git:github.com/user/repo  ·  https://github.com/user/repo" style="flex:1;font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink)"><button class="b small" id="pkgAdd">install</button></div><pre class="out" id="pkgOut" style="display:none"></pre>
+      <div class="hint">Browse packages at <a href="https://pi.dev/packages" target="_blank">pi.dev/packages</a>. MCP bridges, sandboxes, subagents and more are packages.</div></div>
+    <div class="card" id="s-skills"><h3>Skills</h3><div id="skillList">${(d.skills || []).map(sk => `<div class="mcp-row"><b>${esc(sk.name)}</b><span class="hint">${esc(sk.description)}</span><button class="b small danger" data-rmskill="${esc(sk.name)}">✕</button></div>`).join("") || '<span class="hint">none</span>'}</div>
+      <div class="rowbtns"><input id="skillRepo" placeholder="owner/repo (GitHub) or git URL, e.g. typesafe-ai/skills" style="flex:2;font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink)"><input id="skillName" placeholder="skill folder (optional)" style="flex:1;font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink)"><button class="b small" id="skillAdd">add from git</button></div><pre class="out" id="skillOut" style="display:none"></pre>
+      <div class="hint">Skills are SKILL.md folders (agentskills.io). Installed into ${esc(d.agentDir)}/skills. The <b>typesafe-ai</b> and <b>reflex</b> skills ship with Reflex and are refreshed on start.</div></div>
+    <div class="card" id="s-connectors"><h3>Connectors (MCP servers)</h3><div id="mcpList"></div>
+      <div class="form" style="margin-top:8px"><label>name</label><input id="mName" placeholder="github"><label>command</label><input id="mCmd" placeholder="npx -y @modelcontextprotocol/server-github   (stdio)"><label>or URL</label><input id="mUrl" placeholder="https://mcp.example.com/mcp   (streamable HTTP)"><label>env / headers</label><input id="mEnv" placeholder="GITHUB_TOKEN=ghp_…  Authorization=Bearer …"></div>
+      <div class="rowbtns"><button class="b small" id="mTest">test</button><button class="b small primary" id="mAdd">add & save</button></div><pre class="out" id="mOut" style="display:none"></pre>
+      <div class="hint">Every tool of every enabled server becomes a Reflex tool named <code>server__tool</code>, gated by the reflex layer like any other. Stored in ~/.reflex/mcp.json.</div></div>`;
+  const drawMcp = () => { const servers = state.settings.mcp.servers || {}; $("#mcpList").innerHTML = Object.keys(servers).length ? Object.entries(servers).map(([n, sv]) => `<div class="mcp-row"><b>${esc(n)}</b><span class="hint">${esc(sv.command ? [sv.command, ...(sv.args || [])].join(" ") : sv.url || "")}${sv.enabled === false ? " · disabled" : ""}</span><span><button class="b small" data-mtoggle="${esc(n)}">${sv.enabled === false ? "enable" : "disable"}</button> <button class="b small danger" data-mrm="${esc(n)}">✕</button></span></div>`).join("") : '<span class="hint">none configured</span>';
+    $("#mcpList").querySelectorAll("[data-mrm]").forEach(b => b.onclick = async () => { delete servers[b.dataset.mrm]; await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers }), headers: { "Content-Type": "application/json" } }); drawMcp(); });
+    $("#mcpList").querySelectorAll("[data-mtoggle]").forEach(b => b.onclick = async () => { servers[b.dataset.mtoggle].enabled = servers[b.dataset.mtoggle].enabled === false; await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers }), headers: { "Content-Type": "application/json" } }); drawMcp(); }); };
+  drawMcp();
+  const mcpFromForm = () => { const name = $("#mName").value.trim(); const cmd = $("#mCmd").value.trim(); const url = $("#mUrl").value.trim(); const kv = Object.fromEntries($("#mEnv").value.split(/\s+(?=[A-Za-z_][A-Za-z0-9_-]*=)/).filter(Boolean).map(p => { const i = p.indexOf("="); return [p.slice(0, i), p.slice(i + 1)]; }));
+    if (!name || (!cmd && !url)) throw new Error("name and a command or URL are required");
+    const server = cmd ? { command: cmd.split(/\s+/)[0], args: cmd.split(/\s+/).slice(1), env: kv } : { url, headers: kv }; return { name, server }; };
+  $("#mTest").onclick = async () => { const out = $("#mOut"); out.style.display = ""; out.textContent = "connecting…"; try { const r = await api("/api/mcp/test", { method: "POST", body: JSON.stringify(mcpFromForm()), headers: { "Content-Type": "application/json" } }); out.textContent = `✓ ${r.server.name || ""} ${r.server.version || ""} · ${r.tools.length} tools\n` + r.tools.map(t => `  ${t.name} — ${t.description}`).join("\n"); } catch (e) { out.textContent = "✗ " + e.message; } };
+  $("#mAdd").onclick = async () => { try { const { name, server } = mcpFromForm(); const servers = state.settings.mcp.servers || {}; servers[name] = { ...server, enabled: true }; await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers }), headers: { "Content-Type": "application/json" } }); state.settings.mcp.servers = servers; drawMcp(); $("#mOut").style.display = ""; $("#mOut").textContent = `saved ${name}. New sessions get its tools; in an open session type /mcp.`; } catch (e) { $("#mOut").style.display = ""; $("#mOut").textContent = "✗ " + e.message; } };
+  $("#sSave").onclick = async () => {
+    const keys = {}; document.querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
+    const config = {}; document.querySelectorAll("[data-cfg]").forEach(i => { const path = i.dataset.cfg.split("."); let v = i.value; if (v === "true") v = true; else if (v === "false") v = false; else if (i.type === "number") v = Number(v); if (path.at(-1) === "protectedPaths") v = v.split(",").map(x => x.trim()).filter(Boolean); if (v === "" ) v = undefined; let o = config; for (const k of path.slice(0, -1)) o = o[k] ||= {}; o[path.at(-1)] = v; });
+    await api("/api/settings", { method: "POST", body: JSON.stringify({ config, keys }), headers: { "Content-Type": "application/json" } });
+    $("#sMsg").textContent = "saved ✓"; setTimeout(loadSettings, 800); };
+  $("#pkgAdd").onclick = async () => { const out = $("#pkgOut"); out.style.display = ""; out.textContent = "installing…"; try { const r = await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "install", source: $("#pkgSrc").value.trim() }), headers: { "Content-Type": "application/json" } }); out.textContent = r.output || "installed"; setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
+  document.querySelectorAll("[data-rm]").forEach(x => x.onclick = async () => { await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "remove", source: x.dataset.rm }), headers: { "Content-Type": "application/json" } }).catch(e => notice("error", e.message)); loadSettings(); });
+  $("#skillAdd").onclick = async () => { const out = $("#skillOut"); out.style.display = ""; out.textContent = "cloning…"; try { const r = await api("/api/skills", { method: "POST", body: JSON.stringify({ repo: $("#skillRepo").value.trim(), skill: $("#skillName").value.trim() || undefined }), headers: { "Content-Type": "application/json" } }); out.textContent = "installed: " + r.installed.join(", "); setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
+  document.querySelectorAll("[data-rmskill]").forEach(b => b.onclick = async () => { await api(`/api/skills/${b.dataset.rmskill}`, { method: "DELETE" }); loadSettings(); });
+}
+
+// ── boot ────────────────────────────────────────────────────────────────
+(async () => {
+  try { state.config = await api("/api/config"); $("#foot").textContent = `reflex ${state.config.reflex} · voice ${state.config.voice} · ${state.config.model}`; } catch {}
+  await refreshSessions();
+  if (state.sessions[0]) selectSession("web:" + state.sessions[0].id);
+  setInterval(refreshSessions, 5000);
+})();
+</script>
+</body>
+</html>

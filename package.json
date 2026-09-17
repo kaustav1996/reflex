@@ -1,0 +1,58 @@
+{
+  "name": "reflex-agent",
+  "version": "0.1.0",
+  "description": "Reflex: a coding agent and personal assistant with System One reflexes (TypeSafe Jev) on top of the Pi coding agent, any LLM via OpenRouter, and voice input via Sarvam.",
+  "type": "module",
+  "bin": {
+    "reflex": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "skills",
+    "themes",
+    "web",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx tests/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "pi-package",
+    "coding-agent",
+    "typesafe",
+    "system-one",
+    "openrouter",
+    "voice",
+    "computer-use"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-tui": "^0.85.1",
+    "@inquirer/prompts": "^7.4.0",
+    "minimatch": "^10.2.6",
+    "typebox": "^1.1.24"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  },
+  "license": "MIT"
+}
