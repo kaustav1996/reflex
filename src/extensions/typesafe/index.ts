@@ -8,6 +8,7 @@ import { noul } from "./client.js";
 import { registerGate, updateStatus } from "./gate.js";
 import { registerMonitor } from "./monitor.js";
 import { registerRouter } from "./router.js";
+import { registerSelector } from "./selector.js";
 import { ReflexState } from "./state.js";
 
 export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI) => ReflexState {
@@ -25,9 +26,15 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 			}
 		};
 		const ENTRY = "reflex-decision";
+		let lastCtx: import("@earendil-works/pi-coding-agent").ExtensionContext | undefined;
+		pi.on("session_start", async (_e, ctx) => {
+			lastCtx = ctx;
+		});
 		state.show = (kind, summary, detail) => {
 			if (!state.config.reflex.verbose && kind !== "completion") return;
 			pi.appendEntry(ENTRY, { kind, summary, detail, at: Date.now() });
+			// Web/RPC clients don't see TUI-only entries: mirror each decision through a status update they render as a line.
+			if (lastCtx?.hasUI && lastCtx.mode === "rpc") lastCtx.ui.setStatus("reflex-last", `⚡ ${kind} ${summary}`);
 		};
 		pi.registerEntryRenderer<{ kind: string; summary: string; detail?: { signals?: Record<string, number>; reasons?: string[] } }>(ENTRY, (entry, options, theme) => {
 			const d = entry.data;
@@ -44,6 +51,7 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		registerGate(pi, state);
 		registerMonitor(pi, state);
 		registerRouter(pi, state);
+		registerSelector(pi, state);
 
 		pi.on("session_start", async (_e, ctx) => {
 			applyFlag();
@@ -51,7 +59,7 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 			// Prime the TLS connection so the first gated tool call doesn't pay ~1s of handshake.
 			if (state.client) {
 				void state.client
-					.systemOne({ state: "warmup", questions: { ok: noul("Is the state the word warmup?") }, timeoutMs: 5000 })
+					.systemOne({ purpose: "warmup", state: "warmup", questions: { ok: noul("Is the state the word warmup?") }, timeoutMs: 5000 })
 					.then(() => updateStatus(ctx, state))
 					.catch((err) => {
 						state.degradedReason = err instanceof Error ? err.message : String(err);
@@ -66,7 +74,7 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		pi.registerCommand("reflex", {
 			description: "Reflex policy: /reflex [appetite cautious|balanced|bold | gate on|off | monitor on|off | route on|off | verbose on|off | routing fast=<model> default=<model> strong=<model> | stats | last | off | on]",
 			getArgumentCompletions: (prefix) => {
-				const items = ["appetite", "gate", "monitor", "route", "routing", "verbose", "stats", "last", "on", "off"].filter((c) => c.startsWith(prefix)).map((c) => ({ value: c, label: c }));
+				const items = ["appetite", "gate", "monitor", "route", "routing", "verbose", "select", "stats", "last", "on", "off"].filter((c) => c.startsWith(prefix)).map((c) => ({ value: c, label: c }));
 				return items.length ? items : null;
 			},
 			handler: async (args, ctx) => handleCommand(args, ctx, state),
@@ -120,6 +128,9 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 			break;
 		case "verbose":
 			p.verbose = rest[0] !== "off";
+			break;
+		case "select":
+			p.selectSkills = rest[0] !== "off";
 			break;
 		case "routing": {
 			for (const kv of rest) {

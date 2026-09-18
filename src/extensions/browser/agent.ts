@@ -90,7 +90,7 @@ export async function runBrowse(client: TypesafeClient, opts: BrowseOptions): Pr
 		let decision: Decision;
 		const t0 = performance.now();
 		try {
-			const res = await client.systemOne({ state: built.state, questions: built.questions, signal: opts.signal, timeoutMs: 12000 });
+			const res = await client.systemOne({ purpose: "browse", state: built.state, questions: built.questions, signal: opts.signal, timeoutMs: 12000 });
 			jevMs += res.latencyMs;
 			decision = resolveDecision(res.answers as never, built, Math.round(res.latencyMs), res.model);
 		} catch (err) {

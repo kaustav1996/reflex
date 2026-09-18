@@ -40,7 +40,14 @@ export function describeAction(toolName: string, input: Record<string, unknown>,
 	switch (toolName) {
 		case "bash": {
 			const command = String(input.command ?? "");
-			return { tool: "bash", summary: clip(command, 120), detail: { command: clip(command, 1500), timeout: input.timeout }, paths };
+			for (const m of command.matchAll(/(?:^|[\s=:'"])((?:~|\.{1,2})?\/[^\s'"|;&<>)]+|[\w.-]+\/[^\s'"|;&<>)]+)/g)) {
+				const raw = m[1].replace(/^~(?=\/|$)/, homedir());
+				if (/^https?:\/\//.test(raw) || raw.startsWith("-")) continue;
+				paths.push(isAbsolute(raw) ? raw : resolve(cwd, raw));
+			}
+			const touches = paths.filter((p) => !p.startsWith(cwd)).map((p) => p.startsWith(homedir()) ? `~${p.slice(homedir().length)}` : p);
+			const program = command.trim().split(/\s+/)[0] ?? "";
+			return { tool: "bash", summary: clip(command, 120), detail: { command: clip(command, 1500), program, timeout: input.timeout, paths_outside_cwd: touches.slice(0, 10), inside_cwd: touches.length === 0 }, paths };
 		}
 		case "edit": {
 			const path = rel(input.path);
@@ -108,6 +115,35 @@ export function sessionKey(action: ActionDescription): string {
 	return `${action.tool}:${JSON.stringify(action.detail)}`;
 }
 
+/** Broader keys a user can allow for the session: every `<program>` command, or every write/edit under a directory. */
+export function sessionScopeKeys(action: ActionDescription): Array<{ key: string; label: string }> {
+	const out: Array<{ key: string; label: string }> = [];
+	if (action.tool === "bash") {
+		const program = String(action.detail.program ?? "");
+		const sub = String(action.detail.command ?? "").trim().split(/\s+/).slice(0, 2).join(" ");
+		if (program) out.push({ key: `bash-program:${program}`, label: `all \`${program}\` commands` });
+		if (sub && sub !== program && !sub.split(" ")[1]?.startsWith("-")) out.push({ key: `bash-sub:${sub}`, label: `all \`${sub} …\` commands` });
+	}
+	if ((action.tool === "edit" || action.tool === "write") && typeof action.detail.path === "string") {
+		const dir = String(action.detail.path).split("/").slice(0, -1).join("/") || ".";
+		out.push({ key: `${action.tool}-dir:${dir}`, label: `all ${action.tool}s under ${dir}/` });
+		out.push({ key: `files-dir:${dir}`, label: `all edits and writes under ${dir}/` });
+	}
+	if (action.tool.startsWith("computer") || action.tool === "browse") out.push({ key: `tool:${action.tool}`, label: `all ${action.tool} actions` });
+	return out;
+}
+
+export function isSessionAllowed(action: ActionDescription, allowed: Set<string>): string | undefined {
+	const exact = sessionKey(action);
+	if (allowed.has(exact)) return exact;
+	for (const k of sessionScopeKeys(action)) if (allowed.has(k.key)) return k.key;
+	if (action.tool === "edit" || action.tool === "write") {
+		const dir = String(action.detail.path ?? "").split("/").slice(0, -1).join("/") || ".";
+		if (allowed.has(`files-dir:${dir}`)) return `files-dir:${dir}`;
+	}
+	return undefined;
+}
+
 async function askUser(ctx: ExtensionContext, action: ActionDescription, verdict: GateVerdict | undefined, note: string | undefined, state: ReflexState): Promise<{ block: boolean; reason?: string; remember?: boolean }> {
 	const theme = ctx.ui.theme;
 	const lines = [theme.fg("warning", `⚡ Reflex wants a second look: ${action.tool}`), "", theme.fg("accent", action.summary)];
@@ -117,15 +153,25 @@ async function askUser(ctx: ExtensionContext, action: ActionDescription, verdict
 	lines.push("");
 	if (verdict) for (const r of verdict.reasons) lines.push(theme.fg("muted", `• ${r}`));
 	if (note) lines.push(theme.fg("dim", note));
-	const choice = await ctx.ui.select(lines.join("\n"), ["Allow once", "Allow this for the rest of the session", "Deny and tell the agent why", "Deny"]);
+	const scopes = sessionScopeKeys(action);
+	const options = ["Allow once", "Allow this exact action for the session", ...scopes.map((s) => `Allow ${s.label} for the session`), "Deny and tell the agent why", "Deny"];
+	const choice = await ctx.ui.select(lines.join("\n"), options);
 	state.gate.asked++;
 	if (choice === "Allow once") {
 		state.gate.userAllowed++;
 		return { block: false };
 	}
-	if (choice?.startsWith("Allow this")) {
+	if (choice?.startsWith("Allow this exact")) {
 		state.gate.userAllowed++;
 		return { block: false, remember: true };
+	}
+	const scoped = scopes.find((s) => choice === `Allow ${s.label} for the session`);
+	if (scoped) {
+		state.gate.userAllowed++;
+		state.sessionAllow.add(scoped.key);
+		state.allowedHistory.push(`${scoped.label} (user allowed for this session)`);
+		state.record("gate", `session-allow ${scoped.label}`);
+		return { block: false };
 	}
 	state.gate.userDenied++;
 	if (choice?.startsWith("Deny and")) {
@@ -143,8 +189,11 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 
 		const action = describeAction(event.toolName, event.input as Record<string, unknown>, ctx.cwd);
 		const key = sessionKey(action);
-		if (state.sessionAllow.has(key)) {
+		const allowedBy = isSessionAllowed(action, state.sessionAllow);
+		if (allowedBy) {
 			state.gate.skipped++;
+			state.record("gate", `session-allowed ${action.tool}: ${action.summary} [${allowedBy.split(":")[0]}]`);
+			updateStatus(ctx, state);
 			return undefined;
 		}
 
@@ -160,12 +209,14 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 		let signals: GateSignals;
 		try {
 			const res = await state.client.systemOne({
+				purpose: "gate",
 				state: {
 					action: { tool: action.tool, ...action.detail },
 					workspace: { cwd: ctx.cwd, git_repo: isGitRepo(ctx.cwd), protected_paths: policy.protectedPaths },
 					user_request: snap.userRequest || "(no request text)",
 					earlier_requests: snap.earlierRequests,
 					recent_context: snap.recentToolCalls.map((c) => ({ tool: c.tool, args: c.args, error: c.isError ?? false })),
+					user_previously_allowed_this_session: state.allowedHistory.slice(-12),
 				},
 				questions: buildGateQuestions(),
 				signal: ctx.signal,
@@ -189,7 +240,7 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 			return fallback(ctx, action, protectedHit, state, `reflex degraded: ${clip(state.degradedReason, 80)}`);
 		}
 
-		const verdict = decide(signals, policy.riskAppetite, { hasUI: ctx.hasUI, protectedPathHit: protectedHit });
+		const verdict = decide(signals, policy.riskAppetite, { hasUI: ctx.hasUI, protectedPathHit: protectedHit, readOnlyHint: isReadOnlyCommand(action) });
 		const ms = Math.round(performance.now() - started);
 		state.record("gate", `${verdict.decision} ${action.tool}: ${action.summary} [${verdict.rule}, ${ms}ms]`, { signals, reasons: verdict.reasons });
 		updateStatus(ctx, state);
@@ -209,15 +260,41 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 			return { block: true, reason: `Reflex needs user confirmation for this action (${verdict.reasons.join("; ")}) but no UI is available. Choose a safer approach or stop and report.` };
 		}
 		const answer = await askUser(ctx, action, verdict, undefined, state);
-		if (answer.remember) state.sessionAllow.add(key);
+		if (answer.remember) {
+			state.sessionAllow.add(key);
+			state.allowedHistory.push(`${action.tool}: ${action.summary} (user allowed for this session)`);
+		} else if (!answer.block) state.allowedHistory.push(`${action.tool}: ${action.summary} (user allowed once)`);
+		state.record("gate", `${answer.block ? "user-denied" : "user-allowed"} ${action.tool}: ${action.summary}`);
 		updateStatus(ctx, state);
 		return answer.block ? { block: true, reason: answer.reason } : undefined;
 	});
 }
 
+/** Deterministic hint: well-known read-only programs. Lets headless runs pass `git status`-style commands Jev rates as "outside the workspace". */
+const READ_ONLY_PROGRAMS = new Set(["ls", "cat", "head", "tail", "less", "wc", "grep", "rg", "find", "fd", "stat", "file", "which", "echo", "pwd", "env", "printenv", "date", "whoami", "uname", "df", "du", "ps", "tree", "jq", "sort", "uniq", "diff", "md5", "shasum", "sha256sum", "basename", "dirname", "realpath", "readlink", "type"]);
+const READ_ONLY_SUBCOMMANDS: Record<string, Set<string>> = {
+	git: new Set(["status", "log", "diff", "show", "branch", "remote", "rev-parse", "ls-files", "blame", "describe", "tag", "stash list", "config --get"]),
+	npm: new Set(["ls", "list", "view", "outdated", "test", "run test", "audit"]),
+	node: new Set(["--version", "-v"]),
+	docker: new Set(["ps", "images", "logs", "inspect"]),
+	kubectl: new Set(["get", "describe", "logs"]),
+};
+export function isReadOnlyCommand(action: ActionDescription): boolean {
+	if (action.tool !== "bash") return false;
+	const cmd = String(action.detail.command ?? "").trim();
+	if (/[|;&>]|\$\(|`/.test(cmd) && !/^\S+[^|;&>]*\|\s*(wc|head|tail|grep|sort|uniq|cat|jq|less)\b[^|;&>]*$/.test(cmd)) return false;
+	const first = cmd.split(/\s*\|\s*/)[0].trim();
+	const [program, ...rest] = first.split(/\s+/);
+	if (READ_ONLY_PROGRAMS.has(program)) return true;
+	const subs = READ_ONLY_SUBCOMMANDS[program];
+	if (!subs) return false;
+	return [...subs].some((sub) => first.startsWith(`${program} ${sub}`) && !/\s-(f|D|d)\b|--force|--delete/.test(rest.join(" ")));
+}
+
 async function fallback(ctx: ExtensionContext, action: ActionDescription, protectedHit: string | undefined, state: ReflexState, note: string) {
 	const cmd = action.tool === "bash" ? String(action.detail.command ?? "") : "";
 	const dangerous = DANGEROUS_PATTERNS.some((p) => p.test(cmd));
+	state.record("gate", `${protectedHit || dangerous ? "ask" : "allow"} ${action.tool}: ${action.summary} [fallback rules — ${note}]`);
 	updateStatus(ctx, state);
 	if (!protectedHit && !dangerous) return undefined;
 	if (!ctx.hasUI) {

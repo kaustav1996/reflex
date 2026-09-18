@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decide, type GateSignals, THRESHOLDS } from "../src/extensions/typesafe/policy.ts";
-import { describeAction, isGatedTool, protectedPathHit, sessionKey } from "../src/extensions/typesafe/gate.ts";
+import { describeAction, isGatedTool, isReadOnlyCommand, isSessionAllowed, protectedPathHit, sessionKey, sessionScopeKeys } from "../src/extensions/typesafe/gate.ts";
 import { isValidChoice } from "../src/extensions/typesafe/client.ts";
 
 const safe: GateSignals = { destructive: 0.02, outsideWorkspace: 0.05, secrets: 0.01, externalSideEffect: 0.02, privilege: 0.01, intentMatch: 0.95, risk: 0.2, riskConfidence: 0.92 };
@@ -87,4 +87,27 @@ test("isValidChoice rejects malformed distributions", () => {
 	assert.ok(!isValidChoice({ type: "choice", choice: "c", probabilities: { a: 0.7, b: 0.3 }, confidence: 0.6 }, ["a", "b"]));
 	assert.ok(!isValidChoice({ type: "choice", choice: "a", probabilities: { a: 0.2, b: 0.3 }, confidence: 0.6 }, ["a", "b"]));
 	assert.ok(!isValidChoice({ type: "choice", choice: "b", probabilities: { a: 0.7, b: 0.3 }, confidence: 0.6 }, ["a", "b"]));
+});
+
+test("session allow scopes: program-wide and directory-wide keys", () => {
+	const a = describeAction("bash", { command: "git push origin feature" }, "/repo");
+	const scopes = sessionScopeKeys(a);
+	assert.ok(scopes.some((s) => s.key === "bash-program:git"));
+	assert.ok(scopes.some((s) => s.key === "bash-sub:git push"));
+	assert.equal(isSessionAllowed(a, new Set(["bash-program:git"])), "bash-program:git");
+	assert.equal(isSessionAllowed(describeAction("bash", { command: "npm test" }, "/repo"), new Set(["bash-program:git"])), undefined);
+	const w = describeAction("write", { path: "src/a/b.ts", content: "" }, "/repo");
+	assert.equal(isSessionAllowed(w, new Set(["files-dir:src/a"])), "files-dir:src/a");
+});
+
+test("bash path hints and read-only detection", () => {
+	const a = describeAction("bash", { command: "cat ~/.ssh/config && ls /etc" }, "/repo");
+	assert.ok((a.detail.paths_outside_cwd as string[]).some((p) => p.includes(".ssh")));
+	assert.ok(isReadOnlyCommand(describeAction("bash", { command: "git status" }, "/repo")));
+	assert.ok(isReadOnlyCommand(describeAction("bash", { command: "ls -la | wc -l" }, "/repo")));
+	assert.ok(!isReadOnlyCommand(describeAction("bash", { command: "git push --force" }, "/repo")));
+	assert.ok(!isReadOnlyCommand(describeAction("bash", { command: "cat x > y" }, "/repo")));
+	const v = decide({ ...safe, outsideWorkspace: 0.7, riskConfidence: 0.1 }, "cautious", { hasUI: false, readOnlyHint: true });
+	assert.equal(v.decision, "allow");
+	assert.equal(v.rule, "read-only-command");
 });

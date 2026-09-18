@@ -90,3 +90,65 @@ branching.
 - Never store secrets in `agent.json`; use environment variables available to `reflex web`.
 - Tell the user the webhook URL and the schedule you configured, and how to disable it
   (`"enabled": false` or the toggle in the Agents tab).
+
+## Design rule: deterministic → TypeSafe → LLM
+
+When you build an agent, prefer **workflow steps** over a single prompt, and choose the
+cheapest capable step type for every activity, in this order:
+
+1. **`shell`** — deterministic code: commands, scripts, `jq`, `git`, `curl`. Use it for anything
+   with a known algorithm: collecting data, running tests, formatting, validation, notifications.
+2. **`decide`** — a TypeSafe Jev question over the collected state, when the next step depends
+   on a judgment (is this a bug? which category? how severe? which of these files matters?).
+   ~100 ms, calibrated probabilities, routes by thresholds you set. Never for generation or math.
+3. **`llm`** — a headless Reflex session, only for work that needs generation or open-ended
+   reasoning (write the fix, draft the report, investigate an unknown failure). Give it the
+   narrowest prompt and tool set; feed it the facts from earlier steps.
+
+`call` runs another agent (chain) and `end` finishes. Routing is data: `route: [{ "when":
+"verdict.failed.noul >= 0.6", "next": "fix" }, { "when": "default", "next": "end" }]`.
+Variables: each step's result is stored under its `id` (or `as`) — `shell` gives
+`{stdout, stderr, exitCode, ok}`, `decide` gives the raw Jev answers, `llm` gives
+`{status, output, toolCalls, reflexBlocks}` — and any `{{path.to.value}}` can be used in later
+steps' `run`, `state`, `prompt`.
+
+```json
+"steps": [
+  { "id": "tests", "type": "shell", "run": "npm test 2>&1 | tail -80", "allowFailure": true },
+  { "id": "verdict", "type": "decide",
+    "state": { "test_output": "{{tests.stdout}}", "exit_code": "{{tests.exitCode}}" },
+    "questions": {
+      "failed": { "type": "noul", "instructions": "Did at least one test fail?" },
+      "flaky": { "type": "noul", "instructions": "Do the failures look like timeouts or network flakiness rather than logic errors?" },
+      "severity": { "type": "score", "instructions": "How severe are the failures?", "criteria": ["No failures", "A few isolated failures", "Core functionality broken"] }
+    },
+    "route": [
+      { "when": "verdict.failed.noul < 0.5", "next": "ok" },
+      { "when": "verdict.flaky.noul >= 0.7", "next": "retry" },
+      { "when": "default", "next": "fix" }
+    ] },
+  { "id": "retry", "type": "shell", "run": "npm test 2>&1 | tail -80", "next": "end" },
+  { "id": "fix", "type": "llm", "tools": ["read", "grep", "find", "ls", "edit", "bash"],
+    "prompt": "These tests failed (severity {{verdict.severity.score}}/2):\n{{tests.stdout}}\nFind the cause and fix it. Run the tests again before finishing." },
+  { "id": "ok", "type": "end", "output": "all green: {{tests.stdout}}" }
+]
+```
+
+### Ordering activities
+
+Order steps so the cheap and certain things run first and the expensive or consequential
+things run last: gather facts (shell) → decide whether anything needs doing (decide) → act
+(llm or shell) → verify (shell) → notify (shell/call). Put a `decide` gate before every `llm`
+step; most runs should end before reaching one. Side effects (sending, deploying, posting)
+go last and should be `shell` steps with explicit inputs, not LLM improvisation.
+
+To classify or order activities you are unsure about, ask Jev from the shell:
+
+```bash
+reflex jev --state "Activity: check whether yesterday's build log contains new warnings" \
+  --choice "kind: shell|decide|llm" "Which step type is the cheapest that can do this activity reliably?"
+reflex jev --state @activities.json --score "How early in the workflow should this activity run?" --levels "first: cheap fact gathering|middle: judgment or transformation|last: side effects"
+```
+
+`reflex jev` prints the probabilities; treat < 0.6 confidence as "ask the user or pick the
+more conservative option".

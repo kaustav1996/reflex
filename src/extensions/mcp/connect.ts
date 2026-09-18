@@ -20,6 +20,97 @@ import { createInterface } from "node:readline";
 import { loadMcpConfig, saveMcpConfig, type McpServerConfig } from "./client.js";
 import { loadStoredKeys, storeKey } from "../../config.js";
 import { findPreset, PRESETS, type ConnectorPreset } from "./presets.js";
+import { clearOAuthCache } from "./authcache.js";
+
+export interface EnableResult {
+	id: string;
+	label: string;
+	auth: "oauth" | "api-key" | "cli";
+	endpoint: string;
+	bridge?: string;
+}
+
+/** Build a preset's server config + metadata WITHOUT persisting. Resolves the API key
+ * for api-key presets (and stores it in keys.json), and optionally clears the OAuth cache
+ * for a fresh consent. Used by the web connect flow so we can run OAuth first and only
+ * persist on success. */
+export function buildPresetConfig(id: string, opts: { readOnly?: boolean; apiKey?: string; fresh?: boolean } = {}): { server: McpServerConfig; result: EnableResult } {
+	const preset = findPreset(id);
+	if (!preset) throw new Error(`unknown connector '${id}'`);
+	const readOnly = !!opts.readOnly;
+	let apiKey = opts.apiKey;
+	if (preset.auth === "api-key") {
+		if (!apiKey) {
+			const envName = preset.envVar;
+			if (envName && process.env[envName]) apiKey = process.env[envName];
+			else apiKey = loadStoredKeys()[preset.id];
+		}
+		if (!apiKey) throw new Error(`'${preset.id}' needs a ${preset.envVar ?? "API key"}`);
+		if (preset.envVar) storeKey(preset.id, apiKey);
+	}
+	if (preset.auth === "oauth" && opts.fresh) {
+		const url = preset.build({ readOnly }).url ?? preset.build({ readOnly }).args?.slice(-1)[0] ?? "";
+		if (url) clearOAuthCache(url);
+	}
+	const server: McpServerConfig = preset.build({ readOnly, apiKey });
+	if (preset.envVar && apiKey) server.env = { ...(server.env ?? {}), [preset.envVar]: apiKey };
+	return {
+		server,
+		result: {
+			id: preset.id,
+			label: preset.label,
+			auth: preset.auth,
+			endpoint: server.url ?? server.args?.slice(-1)[0] ?? "(stdio)",
+			bridge: preset.auth === "oauth" ? `npx ${server.args?.join(" ")}` : undefined,
+		},
+	};
+}
+
+/** Persist a server config under `id` into ~/.reflex/mcp.json. */
+export function persistServer(id: string, server: McpServerConfig): void {
+	const cfg = loadMcpConfig();
+	cfg.servers[id] = server;
+	saveMcpConfig(cfg);
+}
+
+/**
+ * Pure enable of a preset: builds the server config, persists ~/.reflex/mcp.json, and (for
+ * api-key presets) stores the key in ~/.reflex/keys.json. No prompting, no live connect.
+ * Used by the CLI (which resolves the key first); the web server uses buildPresetConfig +
+ * a live connect so it only persists on OAuth success.
+ */
+export function enablePreset(id: string, opts: { readOnly?: boolean; apiKey?: string; fresh?: boolean } = {}): EnableResult {
+	const { server, result } = buildPresetConfig(id, opts);
+	persistServer(result.id, server);
+	return result;
+}
+
+export interface RemoveResult {
+	id: string;
+	clearedOAuth: number;
+	note?: string;
+}
+
+/**
+ * Remove a connector from ~/.reflex/mcp.json and (for OAuth presets) wipe the cached
+ * mcp-remote token for its URL, so reconnecting re-prompts for consent rather than silently
+ * reusing a lingering credential. Note: this does NOT revoke the token at the provider —
+ * the user should do that in the service's settings (we tell them so in the result).
+ */
+export function removeConnector(id: string): RemoveResult {
+	const cfg = loadMcpConfig();
+	if (!cfg.servers[id]) return { id, clearedOAuth: 0, note: "not configured" };
+	let cleared = 0;
+	const preset = findPreset(id);
+	if (preset?.auth === "oauth") {
+		const url = preset.build({}).url ?? preset.build({}).args?.slice(-1)[0] ?? "";
+		if (url) cleared = clearOAuthCache(url);
+	}
+	delete cfg.servers[id];
+	saveMcpConfig(cfg);
+	const note = cleared > 0 ? `cleared local OAuth token; revoke access at the provider for full disconnect` : undefined;
+	return { id, clearedOAuth: cleared, note };
+}
 
 export async function runConnectCli(args: string[]): Promise<void> {
 	const sub = args[0];
@@ -31,11 +122,10 @@ export async function runConnectCli(args: string[]): Promise<void> {
 	if (sub === "remove" || sub === "disable" || sub === "delete") {
 		const id = args[1];
 		if (!id) return die(`usage: reflex connect remove <id>`);
-		const cfg = loadMcpConfig();
-		if (!cfg.servers[id]) return warn(`connector '${id}' is not configured`);
-		delete cfg.servers[id];
-		saveMcpConfig(cfg);
-		console.log(`✓ removed connector '${id}'`);
+		if (!loadMcpConfig().servers[id]) return warn(`connector '${id}' is not configured`);
+		const r = removeConnector(id);
+		console.log(`✓ removed connector '${r.id}'` + (r.clearedOAuth ? ` · cleared local OAuth token (${r.clearedOAuth} file(s))` : ""));
+		if (r.note) console.log(`  note: ${r.note}`);
 		return;
 	}
 
@@ -46,27 +136,18 @@ export async function runConnectCli(args: string[]): Promise<void> {
 	const flags = parseFlags(args.slice(1));
 	const readOnly = !!flags["readonly"] || !!flags["ro"];
 
-	const cfg = loadMcpConfig();
 	let apiKey: string | undefined;
 	if (preset.auth === "api-key") {
 		apiKey = await resolveApiKey(preset, flags);
 		if (!apiKey) return die(`'${preset.id}' needs a ${preset.envVar}. Set it in your env, pass --key, or run interactively.`);
-		if (preset.envVar) storeKey(preset.id, apiKey);
 	}
 
-	const server = preset.build({ readOnly, apiKey });
-	// carry the env var through to the spawned bridge / http client
-	if (preset.envVar && apiKey) {
-		server.env = { ...(server.env ?? {}), [preset.envVar]: apiKey };
-	}
-	cfg.servers[preset.id] = server;
-	saveMcpConfig(cfg);
-
-	const how = preset.auth === "oauth" ? "OAuth — a browser tab will open on first connect" : `API key (stored in ~/.reflex/keys.json)`;
-	console.log(`✓ enabled connector '${preset.id}' — ${preset.label}`);
+	const result = enablePreset(sub, { readOnly, apiKey, fresh: true });
+	const how = result.auth === "oauth" ? "OAuth — a browser tab will open on first connect (cached token cleared)" : result.auth === "cli" ? "local server; uses the vendor CLI's own login" : `API key (stored in ~/.reflex/keys.json)`;
+	console.log(`✓ enabled connector '${result.id}' — ${result.label}`);
 	console.log(`  ${how}`);
-	console.log(`  endpoint: ${server.url ?? server.args?.slice(-1)[0] ?? "(stdio)"}`);
-	if (preset.auth === "oauth") console.log(`  bridge: npx ${server.args?.join(" ")} (cached in ~/.mcp-auth/)`);
+	console.log(`  endpoint: ${result.endpoint}`);
+	if (result.bridge) console.log(`  bridge: ${result.bridge} (cached in ~/.mcp-auth/)`);
 	console.log(`  check with: reflex connect`);
 }
 

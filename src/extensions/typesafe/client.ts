@@ -8,6 +8,8 @@
  * All questions in one request are evaluated in parallel, so adding heads is ~free in latency.
  * Jev is text-only and returns typed answers with calibrated probabilities (no generation).
  */
+import { logCall } from "../../logs/calls.js";
+
 
 export const TYPESAFE_BASE_URL = process.env.TYPESAFE_BASE_URL ?? "https://api.typesafe.ai/v1";
 export const DEFAULT_JEV_MODEL = "jev-latest";
@@ -60,6 +62,8 @@ export interface SystemOneRequest<Q extends Record<string, Question>> {
 	model?: string;
 	signal?: AbortSignal;
 	timeoutMs?: number;
+	/** Where in Reflex this call comes from (gate, monitor, route, …); goes to the call log, not to the API. */
+	purpose?: string;
 }
 
 export type AnswerFor<Q extends Question> = Q extends NoulQuestion
@@ -168,6 +172,7 @@ export class TypesafeClient {
 					this.stats.inputTokens += json.usage.input_tokens ?? 0;
 					this.stats.outputTokens += json.usage.output_tokens ?? 0;
 				}
+				logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ms: latencyMs, summary: `${req.purpose ?? "call"} · ${Object.keys(req.questions).length} question${Object.keys(req.questions).length === 1 ? "" : "s"} · ${json.model}${json.usage?.input_tokens ? ` · ${json.usage.input_tokens} tok` : ""}`, detail: { state: req.state, questions: req.questions, answers: json.answers, usage: json.usage } });
 				return { ...json, latencyMs };
 			} catch (err) {
 				lastError = err;
@@ -184,6 +189,7 @@ export class TypesafeClient {
 			}
 		}
 		this.stats.failures++;
+		logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ok: false, ms: performance.now() - started, summary: `${req.purpose ?? "call"} failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`, detail: { state: req.state, questions: req.questions } });
 		if (lastError instanceof TypesafeError) throw lastError;
 		throw new TypesafeError(lastError instanceof Error ? lastError.message : String(lastError));
 	}

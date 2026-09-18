@@ -37,7 +37,7 @@ export async function runDoctor(): Promise<void> {
 		const client = new TypesafeClient(tsKey, { model: config.reflex.model, timeoutMs: 8000 });
 		try {
 			const t0 = performance.now();
-			const res = await client.systemOne({ state: { command: "git status" }, questions: { destructive: noul("Is running command destructive?") } });
+			const res = await client.systemOne({ purpose: "doctor", state: { command: "git status" }, questions: { destructive: noul("Is running command destructive?") } });
 			console.log(ok(`TypeSafe ${res.model}: ${Math.round(performance.now() - t0)}ms · P(git status destructive)=${res.answers.destructive.noul.toFixed(3)} · key from ${keys.source("typesafe")}`));
 		} catch (err) {
 			console.log(bad(`TypeSafe: ${err instanceof Error ? err.message : String(err)}`));

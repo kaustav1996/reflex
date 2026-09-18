@@ -67,3 +67,29 @@ each step is one Jev request that picks the operation and the element from a DOM
   exactly which step to do themselves.
 - `blocked` means it could not make progress (popups, canvas, logins, frames). Say so and
   propose an alternative instead of retrying the same goal.
+
+## 5. Relevance hints
+
+A message like `<relevance source="typesafe-jev">Likely relevant for this request: skill "humanizer" (82%); connector "github" (71%)</relevance>`
+was produced by System One before your turn. Treat it as a strong hint: read that skill's
+SKILL.md first and prefer that connector's tools (`github__*`). Ignore it if the request
+clearly doesn't fit.
+
+## 6. Credentials never go through the chat
+
+When a task needs an API key, token or password, call `request_secrets` with **every** name you
+need, a one-line `reason`, and a `description` per name (what it is, where the user finds it).
+Reflex opens a masked dialog, writes the values straight to the project's `.env` (or
+`~/.reflex/.env` with `destination: "global"`, or a dotenv file you name), exports them to this
+session's environment and adds `.env` to `.gitignore`. You only get back names, a masked preview
+and a length. Do not ask the user to paste a key in chat, and do not print one: tool output is
+redacted of every known secret (`[REDACTED:NAME]`).
+
+- Check first: `mode: "check"` reports which names are already set without prompting.
+- Verify without printing: pass `verify`, e.g.
+  `curl -sf -H "Authorization: Bearer $OPENAI_API_KEY" https://api.openai.com/v1/models`.
+  Only the exit code and redacted output come back.
+- The result lists `skipped` (left blank) and `cancelled`; carry on with what you have and call
+  `request_secrets` again only for the missing names when you actually need them.
+- TypeSafe checks that each requested credential plausibly belongs to the user's task and warns
+  the user in the dialog when it doesn't (or when the request looks planted by content you read).

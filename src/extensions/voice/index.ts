@@ -141,6 +141,7 @@ export function createVoiceExtension(config: ReflexConfig, getReflex: () => Refl
 				try {
 					const snap = snapshotSession(ctx, { maxToolCalls: 3 });
 					const res = await reflex.client.systemOne({
+						purpose: "voice-intent",
 						state: {
 							transcript: text,
 							recent_context: { last_user_request: clip(snap.userRequest, 300), last_assistant_text: clip(snap.assistantText, 500), agent_is_working: !ctx.isIdle() },

@@ -16,9 +16,10 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, unwatchFile, watchFile } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, unwatchFile, watchFile, mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createKeyResolver, loadReflexConfig } from "../config.js";
@@ -32,6 +33,20 @@ import { startScheduler } from "../agents/scheduler.js";
 import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listRuns, loadAgent, loadRun, runLogPath, saveAgent } from "../agents/store.js";
 import { getReflexHome, loadReflexConfig as loadCfg, saveReflexConfig, SERVICE_ENV, storeKey } from "../config.js";
 import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/client.js";
+import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
+import { PRESET_META } from "../extensions/mcp/presets.js";
+import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
+import { githubAuth } from "../artifacts/github.js";
+import { artifactsConfig, deployLogPath, listArtifacts, listDeploys, loadArtifact, loadDeploy } from "../artifacts/store.js";
+import { writeSecret } from "../extensions/secrets/store.js";
+import { rememberSecret } from "../extensions/secrets/index.js";
+import { callLogStats, clearCalls, readCalls, type CallKind } from "../logs/calls.js";
+import { saveArtifact } from "../artifacts/store.js";
+
+function artifactsCfgFor() {
+	const gh = githubAuth();
+	return artifactsConfig(gh ? { ok: true, source: gh.source } : undefined);
+}
 import { getPiAgentDir } from "../config.js";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,6 +66,8 @@ interface Session {
 	createdAt: number;
 	alive: boolean;
 	resumeFile?: string;
+	resumeBaseSize?: number;
+	branch?: string | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -116,17 +133,34 @@ function tailSessionFile(file: string, res: ServerResponse, req: IncomingMessage
 	});
 }
 
-async function recentSessions(): Promise<Array<{ path: string; id: string; cwd: string; name: string; modified: number; messages: number }>> {
-	try {
-		const all = await SessionManager.listAll();
-		return all
-			.filter((s) => s.cwd && s.messageCount > 0)
-			.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime())
-			.slice(0, 20)
-			.map((s) => ({ path: s.path, id: s.id, cwd: s.cwd, name: s.name || s.firstMessage?.slice(0, 60) || s.cwd.split("/").pop() || s.id, modified: new Date(s.modified).getTime(), messages: s.messageCount }));
-	} catch {
-		return [];
+async function loadHistoricalSessions(): Promise<Array<{ path: string; name: string; modified: number }>> {
+	const sessionsDir = join(getPiAgentDir(), "sessions");
+	if (!existsSync(sessionsDir)) return [];
+	const files: Array<{ path: string; name: string; modified: number }> = [];
+	for (const cwdDir of readdirSync(sessionsDir)) {
+		const cwdPath = join(sessionsDir, cwdDir);
+		if (!statSync(cwdPath).isDirectory()) continue;
+		for (const file of readdirSync(cwdPath)) {
+			if (!file.endsWith(".jsonl")) continue;
+			const full = join(cwdPath, file);
+			const stat = statSync(full);
+			files.push({ path: full, name: file, modified: stat.mtimeMs });
+		}
 	}
+	return files.sort((a, b) => b.modified - a.modified);
+}
+
+const branchCache = new Map<string, { at: number; branch: string | null }>();
+function gitBranch(cwd: string): string | null {
+	const c = branchCache.get(cwd);
+	if (c && Date.now() - c.at < 5000) return c.branch;
+	let branch: string | null = null;
+	try {
+		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+		branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, stdio: ["ignore", "pipe", "ignore"], timeout: 1500 }).toString().trim() || null;
+	} catch {}
+	branchCache.set(cwd, { at: Date.now(), branch });
+	return branch;
 }
 
 function cliPath(): string {
@@ -140,11 +174,26 @@ function broadcast(s: Session, line: string): void {
 	for (const res of s.clients) res.write(`data: ${line}\n\n`);
 }
 
+async function recentSessions(): Promise<Array<{ path: string; id: string; cwd: string; name: string; modified: number; messages: number }>> {
+	try {
+		const all = await SessionManager.listAll();
+		return all
+			.filter((s) => s.cwd && s.messageCount > 0)
+			.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime())
+			.slice(0, 20)
+			.map((s) => ({ path: s.path, id: s.id, cwd: s.cwd, name: s.name || s.firstMessage?.slice(0, 60) || s.cwd.split("/").pop() || s.id, modified: new Date(s.modified).getTime(), messages: s.messageCount }));
+	} catch {
+		return [];
+	}
+}
+
 function createSession(cwd: string, name?: string, resumeFile?: string): Session {
 	const id = randomUUID().slice(0, 8);
 	const extra = resumeFile ? ["--session", resumeFile] : [];
 	const proc = spawn(process.execPath, [cliPath(), "--mode", "rpc", ...extra], { cwd, env: { ...process.env, REFLEX_WEB: "1" }, stdio: ["pipe", "pipe", "pipe"] });
-	const s: Session = { id, name: name ?? cwd.split("/").pop() ?? id, cwd, proc, buffer: "", recent: [], clients: new Set(), pendingUi: new Map(), createdAt: Date.now(), alive: true, resumeFile };
+	let resumeBaseSize = 0;
+	if (resumeFile) { try { resumeBaseSize = statSync(resumeFile).size; } catch {} }
+	const s: Session = { id, name: name ?? cwd.split("/").pop() ?? id, cwd, proc, buffer: "", recent: [], clients: new Set(), pendingUi: new Map(), createdAt: Date.now(), alive: true, resumeFile, resumeBaseSize };
 	proc.stdout?.setEncoding("utf8");
 	proc.stdout?.on("data", (chunk: string) => {
 		s.buffer += chunk;
@@ -157,6 +206,8 @@ function createSession(cwd: string, name?: string, resumeFile?: string): Session
 				const ev = JSON.parse(line) as { type?: string; id?: string; method?: string };
 				if (ev.type === "extension_ui_request" && ev.id && ["select", "confirm", "input", "editor"].includes(ev.method ?? "")) s.pendingUi.set(ev.id, ev);
 				if (ev.type === "extension_ui_response" && ev.id) s.pendingUi.delete(ev.id);
+				// A dialog cannot outlive the agent run that opened it (Pi cancels it on abort/end), so drop stale ones here.
+				if (ev.type === "agent_end" || ev.type === "agent_settled" || ev.type === "session_exit") s.pendingUi.clear();
 			} catch {
 				continue;
 			}
@@ -199,7 +250,17 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 	const port = options.port ?? Number(process.env.REFLEX_WEB_PORT ?? 7331);
 	const require = createRequire(import.meta.url);
 	const appPath = join(dirname(require.resolve("../../package.json")), "web", "app.html");
-	const html = () => (existsSync(appPath) ? readFileSync(appPath, "utf8") : "<h1>reflex web: app.html missing</h1>");
+	// The page is re-read from disk on every request, but this process keeps the server code it
+	// started with. If dist/ was rebuilt since, say so on the page instead of failing quietly.
+	const serverStartedAt = Date.now();
+	const serverJs = join(dirname(require.resolve("../../package.json")), "dist", "web", "server.js");
+	const staleBanner = () => {
+		try {
+			if (existsSync(serverJs) && statSync(serverJs).mtimeMs > serverStartedAt) return `<div class="stale">⟳ reflex was rebuilt after this server started · stop it (ctrl+c) and run <b>reflex web</b> again, or some pages will fail</div>`;
+		} catch {}
+		return "";
+	};
+	const html = () => (existsSync(appPath) ? readFileSync(appPath, "utf8").replace("__REFLEX_STALE__", staleBanner()) : "<h1>reflex web: app.html missing</h1>");
 	const token = randomUUID();
 
 	const server = createServer(async (req, res) => {
@@ -254,13 +315,17 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			}
 			if (url.pathname === "/api/sessions" && req.method === "GET") {
 				const live = livePresence();
+				for (const s of sessions.values()) s.branch = gitBranch(s.cwd);
 				const openFiles = new Set([...sessions.values()].map((s) => s.resumeFile).filter(Boolean));
 				const recent = (await recentSessions()).filter((r) => !live.some((p) => p.sessionFile === r.path) && !openFiles.has(r.path));
 				return json(res, 200, {
-					sessions: [...sessions.values()].map((s) => ({ id: s.id, name: s.name, cwd: s.cwd, alive: s.alive, createdAt: s.createdAt, pendingUi: [...s.pendingUi.values()] })),
+					sessions: [...sessions.values()].map((s) => ({ id: s.id, name: s.name, cwd: s.cwd, alive: s.alive, createdAt: s.createdAt, branch: s.branch ?? null, pendingUi: [...s.pendingUi.values()] })),
 					terminal: live,
 					recent,
 				});
+			}
+			if (url.pathname === "/api/sessions/history" && req.method === "GET") {
+				return json(res, 200, { history: await loadHistoricalSessions() });
 			}
 			if (url.pathname === "/api/sessions" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { cwd?: string; name?: string; sessionFile?: string };
@@ -269,9 +334,16 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				if (body.sessionFile) {
 					if (!existsSync(body.sessionFile)) return json(res, 404, { error: "session file not found" });
 					if (livePresence().some((p) => p.sessionFile === body.sessionFile)) return json(res, 409, { error: "that session is open in a terminal right now; close it there first" });
+					// Don't spawn a duplicate: if a live web session is already resuming this file, return it.
+					const dup = [...sessions.values()].find((s) => s.alive && s.resumeFile === body.sessionFile);
+					if (dup) return json(res, 200, { id: dup.id, name: dup.name, cwd: dup.cwd });
 					resumeFile = body.sessionFile;
 					const info = (await recentSessions()).find((r) => r.path === body.sessionFile);
 					if (info?.cwd && existsSync(info.cwd)) cwd = info.cwd;
+				} else {
+					// Don't spawn a duplicate: if a live web session with no resume file already has this cwd, return it.
+					const dup = [...sessions.values()].find((s) => s.alive && !s.resumeFile && s.cwd === cwd);
+					if (dup) return json(res, 200, { id: dup.id, name: dup.name, cwd: dup.cwd });
 				}
 				if (!existsSync(cwd)) return json(res, 400, { error: `directory not found: ${cwd}` });
 				const s = createSession(cwd, body.name, resumeFile);
@@ -283,7 +355,35 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				if (!s) return json(res, 404, { error: "no such session" });
 				if (m[2] === "events" && req.method === "GET") {
 					res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
-					for (const line of s.recent) res.write(`data: ${line}\n\n`);
+					// Replay the resumed session's history from the .jsonl file (everything that existed
+					// at spawn time) as transcript_entry events, so resumed web sessions show their
+					// prior messages instead of starting blank. s.recent holds post-spawn stdout only,
+					// so there is no overlap with the pre-spawn file slice.
+					if (s.resumeFile && (s.resumeBaseSize ?? 0) > 0) {
+						try {
+							const fd = openSync(s.resumeFile, "r");
+							try {
+								const buf = Buffer.alloc(s.resumeBaseSize!);
+								readSync(fd, buf, 0, buf.length, 0);
+								for (const line of buf.toString("utf8").split("\n")) {
+									const trimmed = line.trim();
+									if (!trimmed) continue;
+									try { res.write(`data: ${JSON.stringify({ type: "transcript_entry", entry: JSON.parse(trimmed) })}\n\n`); } catch {}
+								}
+							} finally { closeSync(fd); }
+						} catch {}
+					}
+					// Replay history, but not dialogs that were already answered or cancelled: a reconnecting
+					// page must only see requests that are still pending.
+					for (const line of s.recent) {
+						if (line.includes('"extension_ui_request"')) {
+							try {
+								const ev = JSON.parse(line) as { type?: string; id?: string; method?: string };
+								if (ev.type === "extension_ui_request" && ["select", "confirm", "input", "editor"].includes(ev.method ?? "") && !(ev.id && s.pendingUi.has(ev.id))) continue;
+							} catch {}
+						}
+						res.write(`data: ${line}\n\n`);
+					}
 					res.write(`data: ${JSON.stringify({ type: "replay_done" })}\n\n`);
 					s.clients.add(res);
 					const ping = setInterval(() => res.write(": ping\n\n"), 25000);
@@ -306,6 +406,17 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					sessions.delete(s.id);
 					return json(res, 200, { ok: true });
 				}
+			}
+			const um = url.pathname.match(/^\/api\/sessions\/([a-z0-9-]+)\/upload$/);
+			if (um && req.method === "POST") {
+				const s = sessions.get(um[1]);
+				if (!s) return json(res, 404, { error: "no such session" });
+				const name = (url.searchParams.get("name") || "file").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+				const dir = join(getReflexHome(), "uploads", s.id);
+				mkdirSync(dir, { recursive: true });
+				const path = join(dir, name);
+				writeFileSync(path, await readBody(req, 50 * 1024 * 1024));
+				return json(res, 200, { path });
 			}
 			if (url.pathname === "/api/transcribe" && req.method === "POST") {
 				const config = loadReflexConfig();
@@ -392,12 +503,18 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					if (existsSync(log)) for (const line of readFileSync(log, "utf8").split("\n")) if (line.trim()) res.write(`data: ${line}\n\n`);
 					res.write(`data: ${JSON.stringify({ type: "replay_done" })}\n\n`);
 					const detach = attachRunListener(runRec.id, (_r, ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`));
-					if (!detach) res.write(`data: ${JSON.stringify({ type: "run_closed", status: runRec.status })}\n\n`);
 					const ping = setInterval(() => res.write(": ping\n\n"), 25000);
 					req.on("close", () => {
 						clearInterval(ping);
 						detach?.();
 					});
+					// Finished run: no live listener to attach — send the closure event and end the stream
+					// instead of holding a dead connection open forever.
+					if (!detach) {
+						res.write(`data: ${JSON.stringify({ type: "run_closed", status: runRec.status })}\n\n`);
+						clearInterval(ping);
+						return void res.end();
+					}
 					return;
 				}
 				if (!rm[3] && req.method === "GET") return json(res, 200, { run: runRec, live: !!getLiveRun(runRec.id) });
@@ -414,8 +531,17 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					packages = sp.packages ?? [];
 				} catch {}
 				const skillsDir = join(getPiAgentDir(), "skills");
-				const skills = existsSync(skillsDir) ? readdirSync(skillsDir).filter((n) => existsSync(join(skillsDir, n, "SKILL.md"))).map((n) => ({ name: n, description: (readFileSync(join(skillsDir, n, "SKILL.md"), "utf8").match(/^description:\s*>?\s*([\s\S]*?)\n(?:[a-z-]+:|---)/m)?.[1] ?? "").replace(/\s+/g, " ").trim().slice(0, 200) })) : [];
-				return json(res, 200, { config: cfg, keys: keyStatus, env: SERVICE_ENV, packages, skills, mcp: loadMcpConfig(), agentDir: getPiAgentDir(), home: getReflexHome() });
+				const bundledDir = join(dirname(require.resolve("../../package.json")), "skills");
+				const skills = existsSync(skillsDir)
+					? readdirSync(skillsDir)
+							.filter((n) => existsSync(join(skillsDir, n, "SKILL.md")))
+							.map((n) => ({
+								name: n,
+								description: (readFileSync(join(skillsDir, n, "SKILL.md"), "utf8").match(/^description:\s*[|>]?-?\s*([\s\S]*?)\n(?:[a-z-]+:|---)/m)?.[1] ?? "").replace(/^["']|["']$/g, "").replace(/\s+/g, " ").trim().slice(0, 300),
+								bundled: existsSync(join(bundledDir, n, "SKILL.md")),
+							}))
+					: [];
+				return json(res, 200, { config: cfg, keys: keyStatus, env: SERVICE_ENV, packages, skills, mcp: loadMcpConfig(), presets: PRESET_META, artifacts: artifactsCfgFor(), artifactDefaults: { RENDER_REGION: process.env.RENDER_REGION || "singapore", ARTIFACTS_REPO_PRIVATE: /^(1|true|yes)$/i.test(process.env.ARTIFACTS_REPO_PRIVATE ?? "") }, agentDir: getPiAgentDir(), home: getReflexHome() });
 			}
 			if (url.pathname === "/api/settings" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { config?: Partial<ReturnType<typeof loadCfg>>; keys?: Record<string, string> };
@@ -487,10 +613,159 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				rmSync(join(getPiAgentDir(), "skills", skm[1]), { recursive: true, force: true });
 				return json(res, 200, { ok: true });
 			}
+			if (skm && req.method === "GET") {
+				// One skill: its SKILL.md and the files beside it, for the settings detail page.
+				const dir = join(getPiAgentDir(), "skills", skm[1]);
+				if (!existsSync(join(dir, "SKILL.md"))) return json(res, 404, { error: "skill not found" });
+				const files: string[] = [];
+				const walk = (d: string, rel: string, depth: number) => {
+					if (depth > 3) return;
+					for (const n of readdirSync(d)) {
+						if (n === ".git" || n === "node_modules" || n === ".DS_Store") continue;
+						const full = join(d, n);
+						try {
+							if (statSync(full).isDirectory()) walk(full, `${rel}${n}/`, depth + 1);
+							else files.push(`${rel}${n}`);
+						} catch {}
+					}
+				};
+				walk(dir, "", 0);
+				return json(res, 200, { name: skm[1], path: dir, content: readFileSync(join(dir, "SKILL.md"), "utf8").slice(0, 200_000), files: files.slice(0, 200) });
+			}
+			// ---- artifacts: deployable apps under <slug>.<DEPLOY_DOMAIN> ----
+			const artifactsCfg = () => {
+				const gh = githubAuth();
+				return artifactsConfig(gh ? { ok: true, source: gh.source } : undefined);
+			};
+			if (url.pathname === "/api/artifacts" && req.method === "GET") {
+				return json(res, 200, { config: artifactsCfg(), artifacts: listArtifacts().map((a) => ({ ...a, live: liveDeploy(a.id)?.id ?? null })) });
+			}
+			if (url.pathname === "/api/artifacts" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { dir?: string; name?: string };
+				if (!body.dir) return json(res, 400, { error: "dir required" });
+				try {
+					return json(res, 200, { artifact: registerArtifact(body.dir.replace(/^~(?=$|\/)/, homedir()), body.name || undefined) });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/artifacts/config" && req.method === "POST") {
+				// Keys for the user's own Netlify / Render / GitHub accounts → ~/.reflex/.env (never echoed back).
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as Record<string, string>;
+				const allowed = ["NETLIFY_API_KEY", "NETLIFY_ACCOUNT_SLUG", "DEPLOY_DOMAIN", "RENDER_API_KEY", "RENDER_OWNER_ID", "GITHUB_TOKEN", "RENDER_REGION", "ARTIFACTS_REPO_PRIVATE"];
+				const saved: string[] = [];
+				for (const k of allowed) {
+					const v = typeof body[k] === "string" ? body[k].trim() : "";
+					if (!v) continue;
+					writeSecret(join(getReflexHome(), ".env"), k, v);
+					process.env[k] = v;
+					if (/KEY|TOKEN/.test(k)) rememberSecret(k, v);
+					saved.push(k);
+				}
+				return json(res, 200, { saved, config: artifactsCfg() });
+			}
+			const artm = url.pathname.match(/^\/api\/artifacts\/([a-z0-9-]+)(?:\/(deploy|deploys))?$/);
+			if (artm) {
+				const a = loadArtifact(artm[1]);
+				if (!a) return json(res, 404, { error: "no such artifact" });
+				if (!artm[2] && req.method === "GET") return json(res, 200, { artifact: a, deploys: listDeploys(a.id, 50), live: liveDeploy(a.id)?.id ?? null, config: artifactsCfg() });
+				if (!artm[2] && req.method === "PATCH") {
+					const body = JSON.parse((await readBody(req)).toString("utf8")) as { settings?: { domain?: string; region?: string; repoPrivate?: boolean } };
+					const st = body.settings ?? {};
+					a.settings = { domain: st.domain?.trim() || undefined, region: st.region?.trim() || undefined, repoPrivate: typeof st.repoPrivate === "boolean" ? st.repoPrivate : undefined };
+					if (!a.settings.domain && !a.settings.region && a.settings.repoPrivate === undefined) delete a.settings;
+					saveArtifact(a);
+					return json(res, 200, { artifact: a });
+				}
+				if (!artm[2] && req.method === "DELETE") {
+					const lines: string[] = [];
+					try {
+						await destroyArtifact(a.id, (l) => lines.push(l));
+						return json(res, 200, { ok: true, lines });
+					} catch (err) {
+						return json(res, 500, { error: err instanceof Error ? err.message : String(err), lines });
+					}
+				}
+				if (artm[2] === "deploy" && req.method === "POST") {
+					if (liveDeploy(a.id)) return json(res, 409, { error: "already deploying" });
+					const started = new Promise<string>((resolveId) => {
+						void deployArtifact(a.id, { trigger: "api", onEvent: (ev) => ev.type === "deploy_start" && resolveId(ev.deploy.id) }).catch(() => {});
+					});
+					return json(res, 200, { deployId: await started });
+				}
+				if (artm[2] === "deploys" && req.method === "GET") return json(res, 200, { deploys: listDeploys(a.id, 50) });
+			}
+			const adm = url.pathname.match(/^\/api\/artifacts\/([a-z0-9-]+)\/deploys\/([A-Za-z0-9-]+)\/events$/);
+			if (adm && req.method === "GET") {
+				const d = loadDeploy(adm[1], adm[2]);
+				if (!d) return json(res, 404, { error: "no such deploy" });
+				res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+				const log = deployLogPath(d);
+				if (existsSync(log)) for (const line of readFileSync(log, "utf8").split("\n")) if (line.trim()) res.write(`data: ${line}\n\n`);
+				res.write(`data: ${JSON.stringify({ type: "replay_done" })}\n\n`);
+				const detach = attachDeployListener(d.id, (ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`));
+				const ping = setInterval(() => res.write(": ping\n\n"), 25000);
+				req.on("close", () => {
+					clearInterval(ping);
+					detach?.();
+				});
+				if (!detach) {
+					res.write(`data: ${JSON.stringify({ type: "deploy_closed", status: d.status })}\n\n`);
+					clearInterval(ping);
+					return void res.end();
+				}
+				return;
+			}
+			if (url.pathname === "/api/logs" && req.method === "GET") {
+				const kinds = (url.searchParams.get("kind") ?? "").split(",").filter(Boolean) as CallKind[];
+				const entries = readCalls({ limit: Number(url.searchParams.get("limit") ?? 300), kinds, q: url.searchParams.get("q") ?? undefined, since: Number(url.searchParams.get("since") ?? 0) || undefined });
+				return json(res, 200, { entries, stats: callLogStats() });
+			}
+			if (url.pathname === "/api/logs" && req.method === "DELETE") {
+				clearCalls();
+				return json(res, 200, { ok: true });
+			}
 			if (url.pathname === "/api/mcp" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { servers: ReturnType<typeof loadMcpConfig>["servers"] };
 				saveMcpConfig({ servers: body.servers ?? {} });
 				return json(res, 200, { ok: true });
+			}
+			if (url.pathname === "/api/mcp/connect" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { id?: string; readOnly?: boolean; apiKey?: string; connect?: boolean };
+				try {
+					// Build WITHOUT persisting, then run the live connect (OAuth browser flow for
+					// remotes, or a direct initialize for api-key/http). Only persist to mcp.json
+					// if the connect succeeds — so an aborted OAuth consent never leaves a phantom
+					// "connected" entry, and a retry always starts from a clean cache.
+					const { server, result } = buildPresetConfig(body.id ?? "", { readOnly: body.readOnly, apiKey: body.apiKey, fresh: true });
+					let serverInfo: { name?: string; version?: string } | undefined;
+					let tools: { name: string; description: string }[] | undefined;
+					if (body.connect) {
+						const client = new McpClient(result.id, server);
+						try {
+							await client.connect(90000);
+							serverInfo = client.serverInfo;
+							tools = client.tools.map((t) => ({ name: t.name, description: (t.description ?? "").slice(0, 160) }));
+						} finally {
+							client.close();
+						}
+						persistServer(result.id, server);
+					} else {
+						persistServer(result.id, server);
+					}
+					return json(res, 200, { ok: true, ...result, server: serverInfo, tools, mcp: loadMcpConfig() });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/mcp/remove" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { id?: string };
+				try {
+					const r = removeConnector(body.id ?? "");
+					return json(res, 200, { ok: true, ...r, mcp: loadMcpConfig() });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
 			}
 			if (url.pathname === "/api/mcp/test" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { name: string; server: ConstructorParameters<typeof McpClient>[1] };

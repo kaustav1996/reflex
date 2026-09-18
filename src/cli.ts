@@ -59,9 +59,21 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	if (sub === "artifact" || sub === "artifacts") {
+		const { runArtifactCli } = await import("./artifacts/cli.js");
+		await runArtifactCli(args.slice(1));
+		return;
+	}
+
 	if (sub === "connect") {
 		const { runConnectCli } = await import("./extensions/mcp/connect.js");
 		await runConnectCli(args.slice(1));
+		return;
+	}
+
+	if (sub === "jev" || sub === "decide") {
+		const { runJevCli } = await import("./jevcli.js");
+		await runJevCli(args.slice(1));
 		return;
 	}
 
@@ -142,6 +154,7 @@ Usage:
   reflex doctor                               check keys, ffmpeg, TypeSafe reachability
   reflex web [--port 7331] [--no-open]        browser interface: sessions, agents (cron/webhooks), settings
   reflex agent list|run|runs|create|delete    scheduled / webhook agents (see skill reflex-agents)
+  reflex jev --state <text|@file> --questions <json|@file>   ask TypeSafe Jev directly (typed decisions in ~100ms)
   reflex connect [id]                          enable a built-in MCP connector (gmail, slack, atlassian, linear)
   reflex install <npm:pkg|git:repo>           install a Pi package (extensions, skills, prompts, themes)
 

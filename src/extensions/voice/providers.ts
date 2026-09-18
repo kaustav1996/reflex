@@ -3,12 +3,13 @@
  * Sarvam is the default (Indian languages + English, auto-detect, optional
  * translate-to-English); OpenAI, Groq, Deepgram and local whisper.cpp are alternatives.
  */
+import { logCall } from "../../logs/calls.js";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { VoiceConfig, VoiceProviderId } from "../../config.js";
-import { splitWav } from "./recorder.js";
+import { normalizeWav, splitWav, wavDurationSeconds } from "./recorder.js";
 
 export interface Transcript {
 	text: string;
@@ -46,7 +47,9 @@ export async function transcribe(wav: Buffer, opts: TranscribeOptions): Promise<
 		default:
 			throw new Error("No voice provider configured. Run `reflex setup` or /voice provider <name>.");
 	}
-	return { ...result, text: result.text.trim(), provider: config.provider, latencyMs: Math.round(performance.now() - started) };
+	const out = { ...result, text: result.text.trim(), provider: config.provider, latencyMs: Math.round(performance.now() - started) };
+	logCall({ kind: "voice", source: config.provider, ms: out.latencyMs, summary: `${config.provider}${config.model ? ` (${config.model})` : ""} · ${(wav.length / 32000).toFixed(1)}s audio · ${out.text.length} chars${out.language ? ` · ${out.language}` : ""}`, detail: { text: out.text, language: out.language, bytes: wav.length } });
+	return out;
 }
 
 function requireKey(opts: TranscribeOptions, name: string): string {
@@ -71,7 +74,10 @@ const SARVAM_MAX_SECONDS = 29;
 async function sarvam(wav: Buffer, opts: TranscribeOptions): Promise<{ text: string; language?: string }> {
 	const key = requireKey(opts, "Sarvam");
 	const { config } = opts;
-	const chunks = splitWav(wav, SARVAM_MAX_SECONDS);
+	// Rebuild the header: streamed WAVs (ffmpeg → pipe, browser recordings) carry a placeholder data size,
+	// which Sarvam reads as a multi-hour file ("exceeds the maximum limit of 30 seconds").
+	const fixed = normalizeWav(wav);
+	const chunks = splitWav(fixed, SARVAM_MAX_SECONDS);
 	const texts: string[] = [];
 	let language: string | undefined;
 	for (const chunk of chunks) {

@@ -4,9 +4,13 @@
 import { createRequire } from "node:module";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { getReflexConfigPath, type ReflexConfig, storeKey } from "../config.js";
+import { createAgentsExtension } from "./agents/index.js";
+import { createArtifactsExtension } from "./artifacts/index.js";
+import { createLogsExtension } from "./logs.js";
 import { createBrowserExtension } from "./browser/index.js";
 import { createComputerExtension } from "./computer/index.js";
 import { createMcpExtension } from "./mcp/index.js";
+import { createSecretsExtension } from "./secrets/index.js";
 import { createTypesafeExtension } from "./typesafe/index.js";
 import type { ReflexState } from "./typesafe/state.js";
 import { createUiExtension } from "./ui/header.js";
@@ -27,6 +31,7 @@ export function createReflexExtensions(config: ReflexConfig): InlineExtension[] 
 	const shared: { state?: ReflexState } = {};
 	return [
 		{ name: "reflex-ui", factory: createUiExtension(config, VERSION), hidden: true },
+		{ name: "reflex-logs", factory: createLogsExtension(), hidden: true },
 		{ name: "reflex-models", factory: createModelsExtension(), hidden: true },
 		{ name: "reflex-presence", factory: createPresenceExtension(), hidden: true },
 		{
@@ -38,7 +43,10 @@ export function createReflexExtensions(config: ReflexConfig): InlineExtension[] 
 		{ name: "reflex-voice", factory: createVoiceExtension(config, () => shared.state) },
 		{ name: "reflex-computer", factory: createComputerExtension(config) },
 		{ name: "reflex-browser", factory: createBrowserExtension(config, () => shared.state) },
+		{ name: "reflex-agents", factory: createAgentsExtension() },
 		{ name: "reflex-mcp", factory: createMcpExtension() },
+		{ name: "reflex-secrets", factory: createSecretsExtension(config, () => shared.state) },
+		{ name: "reflex-artifacts", factory: createArtifactsExtension(() => shared.state) },
 		{ name: "reflex-setup", factory: createSetupExtension(config, () => shared.state), hidden: true },
 	];
 }

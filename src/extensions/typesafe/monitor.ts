@@ -35,6 +35,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 			try {
 				const snap = snapshotSession(ctx, { maxToolCalls: 8 });
 				const res = await state.client!.systemOne({
+					purpose: "completion",
 					state: {
 						task: snap.userRequest,
 						recent_tool_calls: snap.recentToolCalls,
@@ -87,6 +88,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 		if (!changed) return;
 		try {
 			const res = await state.client.systemOne({
+				purpose: "monitor",
 				state: { task: snap.userRequest, recent_tool_calls: snap.recentToolCalls, assistant_text: snap.assistantText },
 				questions: buildCompletionQuestions(),
 				timeoutMs: policy.timeoutMs,

@@ -175,13 +175,19 @@ export function buildWav(pcm: Buffer, sampleRate: number, channels = 1, bitsPerS
 	return Buffer.concat([header, pcm]);
 }
 
-/** Split a WAV into chunks of at most `maxSeconds` (used for Sarvam's 30 s REST limit). */
+/** Re-emit a WAV with a canonical 44-byte header and exact data size (fixes streamed/placeholder headers). */
+export function normalizeWav(buf: Buffer): Buffer {
+	const info = parseWav(buf);
+	return buildWav(buf.subarray(info.dataOffset, info.dataOffset + info.dataLength), info.sampleRate, info.channels, info.bitsPerSample);
+}
+
+/** Split a WAV into chunks of at most `maxSeconds` (used for Sarvam's 30 s REST limit). Every chunk has an exact header. */
 export function splitWav(buf: Buffer, maxSeconds: number): Buffer[] {
 	const info = parseWav(buf);
 	const bytesPerSecond = (info.sampleRate * info.channels * info.bitsPerSample) / 8;
 	const chunkBytes = Math.floor(bytesPerSecond * maxSeconds);
 	const pcm = buf.subarray(info.dataOffset, info.dataOffset + info.dataLength);
-	if (pcm.length <= chunkBytes) return [buf];
+	if (pcm.length <= chunkBytes) return [buildWav(pcm, info.sampleRate, info.channels, info.bitsPerSample)];
 	const out: Buffer[] = [];
 	for (let i = 0; i < pcm.length; i += chunkBytes) out.push(buildWav(pcm.subarray(i, Math.min(i + chunkBytes, pcm.length)), info.sampleRate, info.channels, info.bitsPerSample));
 	return out;

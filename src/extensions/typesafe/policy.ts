@@ -140,10 +140,15 @@ export const THRESHOLDS: Record<RiskAppetite, AppetiteThresholds> = {
 const pct = (p: number) => `${Math.round(p * 100)}%`;
 
 /** Turn Jev's numbers into a decision. Deterministic; the same signals always give the same verdict. */
-export function decide(signals: GateSignals, appetite: RiskAppetite, opts: { hasUI: boolean; protectedPathHit?: string }): GateVerdict {
+export function decide(signals: GateSignals, appetite: RiskAppetite, opts: { hasUI: boolean; protectedPathHit?: string; readOnlyHint?: boolean }): GateVerdict {
 	const t = THRESHOLDS[appetite];
 	const reasons: string[] = [];
 	if (opts.protectedPathHit) reasons.push(`touches protected path ${opts.protectedPathHit}`);
+	// Code owns this one: a known read-only command (git status, ls, cat …) that Jev merely rates as "outside the
+	// workspace" is not worth a question, and headless runs would otherwise be blocked on it.
+	if (opts.readOnlyHint && !opts.protectedPathHit && signals.destructive < 0.3 && signals.secrets < t.askIf.secrets && signals.externalSideEffect < 0.3 && signals.privilege < 0.3) {
+		return { decision: "allow", reasons: [`read-only command · risk ${signals.risk.toFixed(1)}/3`], signals, rule: "read-only-command" };
+	}
 	if (signals.destructive >= t.askIf.destructive) reasons.push(`may be destructive (${pct(signals.destructive)})`);
 	if (signals.secrets >= t.askIf.secrets) reasons.push(`may expose secrets (${pct(signals.secrets)})`);
 	if (signals.externalSideEffect >= t.askIf.externalSideEffect) reasons.push(`external side effect (${pct(signals.externalSideEffect)})`);

@@ -8,7 +8,7 @@
  * Routing is data, not code: `route: [{ when: "verdict.severity.score >= 2", next: "escalate" }]`.
  */
 import { spawn } from "node:child_process";
-import { createKeyResolver } from "../config.js";
+import { createKeyResolver, loadDotEnv } from "../config.js";
 import { type Question, TypesafeClient } from "../extensions/typesafe/client.js";
 import { piStoredApiKey } from "../extensions/typesafe/state.js";
 import type { AgentDefinition } from "./store.js";
@@ -155,6 +155,7 @@ export interface WorkflowHooks {
 export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: WorkflowHooks): Promise<{ status: "succeeded" | "failed"; output?: string; vars: Vars; error?: string }> {
 	const vars: Vars = { ...initialVars };
 	const ids = steps.map((s, i) => s.id ?? `step${i + 1}`);
+	loadDotEnv(hooks.cwd); // the agent's project .env (and ~/.reflex/.env) may hold TYPESAFE_API_KEY
 	const keys = createKeyResolver(piStoredApiKey);
 	const tsKey = keys.get("typesafe");
 	const jev = tsKey ? new TypesafeClient(tsKey, { timeoutMs: 12000 }) : undefined;
@@ -190,7 +191,7 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					if (!jev) throw new Error("decide step needs TYPESAFE_API_KEY");
 					const state = renderDeep(step.state, vars) as string | Record<string, unknown>;
 					hooks.emit({ type: "step_start", index: i, id, stepType: "decide", summary: Object.keys(step.questions).join(", ") });
-					const res = await jev.systemOne({ state, questions: step.questions, signal: hooks.signal });
+					const res = await jev.systemOne({ purpose: `workflow:${step.id}`, state, questions: step.questions, signal: hooks.signal });
 					vars[as] = res.answers;
 					const next = pickNext(step, vars);
 					emitEnd(true, { answers: res.answers, latencyMs: Math.round(res.latencyMs) }, next);

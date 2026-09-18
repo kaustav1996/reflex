@@ -53,7 +53,7 @@ export function createBrowserExtension(config: ReflexConfig, getReflex: () => Re
 			return ctx.ui.confirm("⚡ Reflex: consequential web action", `Jev thinks the next step is irreversible (${Math.round(irreversible * 100)}%):\n\n  ${label}\n  on ${url}\n\nAllow it?`);
 		}
 
-		async function browse(ctx: ExtensionContext, goal: string, url: string | undefined, maxSteps: number | undefined, onStep: (line: string) => void): Promise<BrowseResult> {
+		async function browse(ctx: ExtensionContext, goal: string, url: string | undefined, maxSteps: number | undefined, onStep: (line: string, entry?: unknown) => void): Promise<BrowseResult> {
 			const reflex = getReflex();
 			if (!reflex?.client) throw new Error("browse needs the TypeSafe reflex layer (TYPESAFE_API_KEY / reflex setup): System One drives the browser.");
 			const startUrl = url ?? (current ? undefined : DEFAULT_START);
@@ -66,7 +66,10 @@ export function createBrowserExtension(config: ReflexConfig, getReflex: () => Re
 				signal: ctx.signal,
 				textHelper: makeTextHelper(ctx),
 				confirm: ({ decision, action, page }) => confirmIrreversible(ctx, action.label, decision.irreversible, page.url),
-				onStep,
+				onStep: (line, entry) => {
+					reflex.record("browse", line);
+					onStep(line, entry);
+				},
 			});
 			current = browser;
 			reflex.record("browse", `${result.status} after ${result.history.length} steps · ${result.decisions} jev calls · ${result.elapsedMs}ms · "${clip(goal, 60)}"${result.reason ? ` · ${clip(result.reason, 200)}` : ""}`);

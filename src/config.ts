@@ -76,6 +76,8 @@ export interface ReflexPolicyConfig {
 	timeoutMs: number;
 	/** Show every Jev decision as a line in the chat (off: only asks/blocks/nudges are visible). */
 	verbose: boolean;
+	/** Before each prompt, let Jev pick the relevant skill and MCP connector and hint the model. */
+	selectSkills: boolean;
 }
 
 export interface ReflexConfig {
@@ -122,6 +124,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		model: "jev-latest",
 		timeoutMs: 4000,
 		verbose: true,
+		selectSkills: true,
 	},
 	llm: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 	ui: { theme: "typesafe" },

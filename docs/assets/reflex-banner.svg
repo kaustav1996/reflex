@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200" role="img" aria-label="Reflex — a coding agent with System One reflexes">
+  <defs>
+    <pattern id="stripes" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="2" fill="#1e1e1e"/>
+    </pattern>
+  </defs>
+  <rect x="2" y="2" width="756" height="196" fill="#fefefe" stroke="#1e1e1e" stroke-width="4"/>
+  <!-- System-1 style striped title bar -->
+  <rect x="2" y="2" width="756" height="30" fill="url(#stripes)"/>
+  <rect x="300" y="6" width="160" height="22" fill="#fefefe"/>
+  <text x="380" y="22" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700" fill="#1e1e1e">reflex</text>
+  <!-- logo -->
+  <g transform="translate(46 62) scale(3)">
+    <rect x="1.5" y="1.5" width="25" height="25" fill="#f386a1" stroke="#1e1e1e" stroke-width="3"/>
+    <path d="M15.5 4 L8 15.5 H14 L12.5 24 L20 12.5 H14 Z" fill="#1e1e1e"/>
+  </g>
+  <text x="160" y="104" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="52" font-weight="800" fill="#1e1e1e">Reflex</text>
+  <text x="160" y="140" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#1e1e1e">a coding agent with System One reflexes</text>
+  <text x="160" y="166" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#6b6b6b">every action judged by TypeSafe Jev · calibrated · ~400 ms · $0.00004</text>
+</svg>

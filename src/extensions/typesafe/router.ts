@@ -28,6 +28,7 @@ export function registerRouter(pi: ExtensionAPI, state: ReflexState): void {
 
 		try {
 			const res = await state.client.systemOne({
+				purpose: "route",
 				state: { request: clip(prompt, 2000), project_hint: { dir: basename(ctx.cwd) } },
 				questions: { tier: buildRoutingQuestion() },
 				timeoutMs: policy.timeoutMs,
