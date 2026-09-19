@@ -36,6 +36,7 @@ import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/clien
 import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
+import { agentDiagram, toMermaid } from "../agents/diagram.js";
 import { ghLogin, githubAuth } from "../artifacts/github.js";
 import { type ProviderName, startCliLogin } from "../artifacts/providers.js";
 import { artifactsConfig, deployLogPath, listArtifacts, listDeploys, loadArtifact, loadDeploy } from "../artifacts/store.js";
@@ -464,6 +465,17 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				const agents = listAgents().map((a) => ({ ...a, running: liveRunsForAgent(a.id).length, lastRun: listRuns(a.id, 1)[0] ?? null, triggersInfo: a.triggers.map((t) => (t.type === "cron" ? { ...t, next: describeCron(t.schedule) } : t.type === "webhook" ? { ...t, url: `http://127.0.0.1:${port}/hooks/${a.id}/${t.secret}` } : t)) }));
 				return json(res, 200, { agents });
 			}
+			if (url.pathname === "/api/agents/diagram" && req.method === "POST") {
+				// Preview: diagram for an unsaved agent definition (the editor form).
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as Record<string, unknown>;
+				try {
+					const draft = { id: String(body.id ?? "draft"), name: String(body.name ?? "draft"), prompt: String(body.prompt ?? ""), triggers: body.triggers ?? [], steps: body.steps, chain: body.chain, reflex: body.reflex, tools: body.tools } as unknown as Parameters<typeof agentDiagram>[0];
+					const diagram = agentDiagram(draft);
+					return json(res, 200, { diagram, mermaid: toMermaid(diagram) });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
 			if (url.pathname === "/api/agents" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as Partial<AgentDefinition> & { name: string; prompt: string };
 				if (!body.name?.trim() || !body.prompt?.trim()) return json(res, 400, { error: "name and prompt are required" });
@@ -476,7 +488,10 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			if (am) {
 				const agent = loadAgent(am[1]);
 				if (!agent) return json(res, 404, { error: "no such agent" });
-				if (!am[2] && req.method === "GET") return json(res, 200, { agent, runs: listRuns(agent.id, 100), live: liveRunsForAgent(agent.id).map((r) => r.id) });
+				if (!am[2] && req.method === "GET") {
+					const diagram = agentDiagram(agent);
+					return json(res, 200, { agent, runs: listRuns(agent.id, 100), live: liveRunsForAgent(agent.id).map((r) => r.id), diagram, mermaid: toMermaid(diagram) });
+				}
 				if (!am[2] && req.method === "DELETE") {
 					for (const r of liveRunsForAgent(agent.id)) cancelRun(r.id);
 					deleteAgent(agent.id);

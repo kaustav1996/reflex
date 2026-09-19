@@ -152,6 +152,21 @@
   .trig { display: grid; grid-template-columns: 90px 1fr auto; gap: 6px; align-items: center; margin: 4px 0; }
   .trig code, .hook { font-size: 11px; word-break: break-all; background: var(--paper); border: 1px dashed var(--line); padding: 3px 6px; }
   .runs { border: 1px solid var(--light); }
+  .wf { overflow: auto; padding: 4px 0; } .wf svg { display: block; font-family: inherit; }
+  .wf-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; margin: 6px 0 2px; }
+  .wf-legend i { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--ink); margin-right: 4px; vertical-align: -1px; }
+  .wf-node rect { stroke: var(--ink); stroke-width: 1.5; }
+  .wf-node.trigger rect { fill: var(--paper); } .wf-node.trigger text { fill: var(--ink); }
+  .wf-node.shell rect { fill: #03aa5c; } .wf-node.shell text { fill: #fefefe; }
+  .wf-node.decide rect { fill: #f386a1; } .wf-node.decide text { fill: #1e1e1e; }
+  .wf-node.llm rect { fill: #d45bb6; } .wf-node.llm text { fill: #fefefe; }
+  .wf-node.call rect { fill: #09aea1; } .wf-node.call text { fill: #fefefe; }
+  .wf-node.end rect { fill: #1e1e1e; } .wf-node.end text { fill: #fefefe; }
+  .wf-node.chain rect { fill: var(--paper); stroke: #09aea1; stroke-dasharray: 4 3; } .wf-node.chain text { fill: var(--ink); }
+  .wf-node.running rect { stroke: #f386a1; stroke-width: 4; animation: blink 1s infinite; }
+  .wf-node.ok rect { stroke: #03aa5c; stroke-width: 4; } .wf-node.failed rect { stroke: #c0392b; stroke-width: 4; } .wf-node.skipped { opacity: .45; }
+  .wf-edge path { fill: none; stroke: var(--ink); stroke-width: 1.5; } .wf-edge.route path { stroke: #f386a1; stroke-width: 2; } .wf-edge.chain path { stroke: #09aea1; stroke-dasharray: 4 3; }
+  .wf-edge text { font-size: 10px; fill: var(--ink); } .wf-edge rect { fill: var(--paper); stroke: var(--line); }
   .run { display: grid; grid-template-columns: 78px 1fr auto; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--light); cursor: pointer; font-size: 12px; }
   .run:hover { background: var(--reflex-bg); } .run.sel { background: var(--pink); color: #1e1e1e; }
   .st { font-weight: 700; } .st.succeeded { color: var(--green); } .st.failed, .st.timeout { color: #c0392b; } .st.running, .st.queued { color: var(--magenta); } .run.sel .st { color: #1e1e1e; }
@@ -707,7 +722,7 @@ async function refreshAgents() {
   if (!agents.length) box.innerHTML = `<div class="empty" style="padding:20px">No agents yet.<br>Press <b>+ agent</b>.</div>`;
 }
 async function openAgent(id, runId) {
-  const data = await api(`/api/agents/${id}`); state.agent = data.agent; state.agentRuns = data.runs; state.agentLive = data.live;
+  const data = await api(`/api/agents/${id}`); state.agent = data.agent; state.agentRuns = data.runs; state.agentLive = data.live; state.agentDiagram = data.diagram; state.agentMermaid = data.mermaid;
   $("#title").textContent = state.agent.name;
   refreshAgents(); renderAgent(runId);
 }
@@ -731,7 +746,7 @@ function agentForm(a) {
       <div class="rowbtns"><button class="b small" id="addCron">+ cron</button><button class="b small" id="addHook">+ webhook</button></div></div>
     <div class="full"><div class="hint">Chain · on success, run these agents with {{output}}</div><div id="aChain">${(a.chain || []).map((c, i) => chainRow(c, i, others)).join("")}</div>
       <div class="rowbtns"><button class="b small" id="addChain" ${others.length ? "" : "disabled"}>+ next agent</button></div></div>
-  </div><div class="rowbtns"><button class="b primary" id="aSave">save</button>${a.id ? `<button class="b" id="aCancel">cancel</button>` : ""}</div></div>`;
+  </div><div class="rowbtns"><button class="b primary" id="aSave">save</button><button class="b" id="aPreviewBtn">preview diagram</button>${a.id ? `<button class="b" id="aCancel">cancel</button>` : ""}</div></div>`;
 }
 const trigRow = (t, i) => t.type === "cron"
   ? `<div class="trig" data-i="${i}" data-type="cron"><span>⏰ cron</span><div><input class="tSched" value="${esc(t.schedule || "")}" placeholder="0 9 * * 1-5  ·  @daily  ·  */30 * * * *"><input class="tInput" value="${esc(t.input || "")}" placeholder="input passed as {{input}} (optional)" style="margin-top:4px"></div><button class="b small tDel">✕</button></div>`
@@ -753,9 +768,54 @@ function wireAgentForm(editing) {
   $("#addHook").onclick = e => { e.preventDefault(); $("#aTrig").insertAdjacentHTML("beforeend", trigRow({ type: "webhook", secret: "" }, Date.now())); rewire(); };
   $("#addChain").onclick = e => { e.preventDefault(); $("#aChain").insertAdjacentHTML("beforeend", chainRow({ agentId: others[0]?.id, input: "{{output}}" }, Date.now(), others)); rewire(); };
   rewire();
+  const preview = async () => { try { const body = readAgentForm(); const r = await api("/api/agents/diagram", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }); let m = $("#aPreview"); if (!m) { m = document.createElement("div"); m.id = "aPreview"; m.className = "card"; m.innerHTML = "<h3>Workflow preview</h3><div id='aPreviewBody'></div>"; $("#aForm").closest(".card").after(m); } drawDiagram(r.diagram, $("#aPreviewBody")); } catch (e) { notice("error", "preview: " + e.message); } };
+  $("#aPreviewBtn").onclick = e => { e.preventDefault(); preview(); };
   $("#aSave").onclick = async () => { try { const { agent } = await api("/api/agents", { method: "POST", body: JSON.stringify(readAgentForm()), headers: { "Content-Type": "application/json" } }); state.editing = false; await openAgent(agent.id); } catch (e) { await askText("Could not save", "", e.message); } };
   if (editing) $("#aCancel").onclick = () => { state.editing = false; renderAgent(); };
 }
+// ── workflow diagram: nodes per component kind, edges per transition, live status per run ──
+const WF_KIND = { trigger: "trigger", shell: "deterministic code", decide: "TypeSafe decision", llm: "LLM", call: "agent call", end: "end", chain: "chained agent" };
+const WF_FILL = { trigger: "var(--paper)", shell: "#03aa5c", decide: "#f386a1", llm: "#d45bb6", call: "#09aea1", end: "#1e1e1e", chain: "var(--paper)" };
+function drawDiagram(d, mount) {
+  if (!d || !mount) return;
+  const W = 210, H = 58, HB = 74, VG = 46, HG = 22, PAD = 16;
+  const order = new Map(d.nodes.map((n, i) => [n.id, i]));
+  const preds = {}; d.edges.forEach(e => { if ((order.get(e.from) ?? 0) < (order.get(e.to) ?? 0) || d.nodes.find(n => n.id === e.from)?.kind === "trigger") (preds[e.to] ||= []).push(e.from); });
+  const layer = {}; d.nodes.forEach(n => { layer[n.id] = n.kind === "trigger" ? 0 : Math.max(1, ...(preds[n.id] || []).filter(p => layer[p] !== undefined).map(p => layer[p] + 1)); });
+  const layers = []; d.nodes.forEach(n => (layers[layer[n.id]] ||= []).push(n));
+  const height = n => (n.badges && n.badges.length ? HB : H);
+  const rowH = layers.map(l => Math.max(...l.map(height)));
+  const width = Math.max(520, ...layers.map(l => l.length * W + (l.length - 1) * HG)) + PAD * 2;
+  const pos = {}; let y = PAD;
+  layers.forEach((l, li) => { const total = l.length * W + (l.length - 1) * HG; let x = (width - total) / 2; l.forEach(n => { pos[n.id] = { x, y, w: W, h: height(n) }; x += W + HG; }); y += rowH[li] + VG; });
+  const totalH = y - VG + PAD;
+  const esc2 = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1) + "…" : String(t));
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${totalH}" viewBox="0 0 ${width} ${totalH}"><defs><marker id="wfArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>`;
+  const edgeLabels = [];
+  const outIdx = {}; // stagger labels of several edges leaving the same node so they don't overlap
+  d.edges.forEach(e => { const a = pos[e.from], b = pos[e.to]; if (!a || !b) return;
+    const back = layer[e.to] <= layer[e.from];
+    const k = (outIdx[e.from] = (outIdx[e.from] || 0) + 1) - 1;
+    let path, lx, ly;
+    if (!back) { const x1 = a.x + a.w / 2, y1 = a.y + a.h, x2 = b.x + b.w / 2, y2 = b.y; const c = (y2 - y1) / 2; path = `M${x1} ${y1} C${x1} ${y1 + c} ${x2} ${y2 - c} ${x2} ${y2}`; const t = 0.28 + k * 0.16; lx = x1 + (x2 - x1) * t; ly = y1 + (y2 - y1) * t; }
+    else { const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x + b.w, y2 = b.y + b.h / 2; const bend = Math.max(x1, x2) + 46; path = `M${x1} ${y1} C${bend} ${y1} ${bend} ${y2} ${x2} ${y2}`; lx = bend + 4; ly = (y1 + y2) / 2; }
+    svg += `<g class="wf-edge ${e.kind}"><path d="${path}" marker-end="url(#wfArrow)"/></g>`;
+    if (e.label) edgeLabels.push({ lx, ly, text: clip(e.label, 34), back });
+  });
+  edgeLabels.forEach(l => { const w = l.text.length * 6.2 + 10; const x = l.back ? l.lx : l.lx - w / 2; svg += `<g class="wf-edge"><rect x="${x}" y="${l.ly - 9}" width="${w}" height="16" rx="2"/><text x="${x + 5}" y="${l.ly + 3}">${esc2(l.text)}</text></g>`; });
+  d.nodes.forEach(n => { const p = pos[n.id]; const badges = (n.badges || []).map(b => clip(b, 40)).join("  ·  ");
+    svg += `<g class="wf-node ${n.kind}" data-node="${esc2(n.id)}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="3"><title>${esc2(WF_KIND[n.kind])}: ${esc2(n.label)}${n.detail ? "\n" + esc2(n.detail) : ""}${badges ? "\n" + esc2(badges) : ""}</title></rect>
+      <text x="${p.x + 10}" y="${p.y + 20}" font-size="12" font-weight="700">${esc2(clip(n.label, 26))}</text>
+      <text x="${p.x + p.w - 8}" y="${p.y + 20}" font-size="9" text-anchor="end" opacity=".8">${esc2(WF_KIND[n.kind].toUpperCase())}</text>
+      ${n.detail ? `<text x="${p.x + 10}" y="${p.y + 38}" font-size="10" opacity=".9">${esc2(clip(n.detail, 34))}</text>` : ""}
+      ${badges ? `<text x="${p.x + 10}" y="${p.y + 56}" font-size="9" opacity=".9">${esc2(clip(badges, 38))}</text>` : ""}</g>`; });
+  svg += "</svg>";
+  mount.innerHTML = `<div class="wf-legend">${d.kinds.map(k => `<span><i style="background:${WF_FILL[k]}${k === "chain" ? ";border-style:dashed" : ""}"></i>${WF_KIND[k]}</span>`).join("")}<span><i style="background:var(--paper);border:2px solid #f386a1"></i>route on a TypeSafe answer</span></div><div class="wf">${svg}</div>`;
+}
+function setDiagramStatus(stepId, status) { document.querySelectorAll(`.wf-node[data-node="${CSS.escape(stepId)}"]`).forEach(el => { el.classList.remove("running", "ok", "failed", "skipped"); if (status) el.classList.add(status); }); }
+function resetDiagramStatus() { document.querySelectorAll(".wf-node").forEach(el => el.classList.remove("running", "ok", "failed", "skipped")); }
+
 function renderAgent(runId) {
   const a = state.agent, pane = $("#agentPane");
   if (state.editing || !a) { pane.innerHTML = agentForm(state.editing && a ? a : null); wireAgentForm(!!(state.editing && a)); return; }
@@ -765,9 +825,12 @@ function renderAgent(runId) {
   pane.innerHTML = `<div class="card"><h3>${esc(a.name)} ${a.enabled ? '<span class="ok">enabled</span>' : '<span class="bad">disabled</span>'}</h3>
     <div class="kv"><span>id</span><span>${a.id}</span><span>folder</span><span>${esc(a.cwd)}</span><span>model</span><span>${esc(a.model || "default")}</span><span>reflex</span><span>${a.reflex || "balanced"}</span><span>tools</span><span>${(a.tools || []).join(", ") || "all"}${a.computer ? " + computer" : ""}</span>${a.steps ? `<span>steps</span><span>${a.steps.map((st, i) => `${i + 1}. <b>${esc(st.id || "step" + (i + 1))}</b> [${st.type}]${st.route ? " ⇢ " + st.route.map(r => esc(r.next)).join("/") : ""}`).join("<br>")}</span>` : `<span>prompt</span><span style="white-space:pre-wrap">${esc(a.prompt)}</span>`}${a.instructions ? `<span>instructions</span><span style="white-space:pre-wrap">${esc(a.instructions)}</span>` : ""}<span>triggers</span><span>${triggersHtml}</span>${(a.chain || []).length ? `<span>chain</span><span>${a.chain.map(c => `→ ${esc(c.agentId)}`).join(" ")}</span>` : ""}</div>
     <div class="rowbtns"><button class="b primary small" id="aRun">▶ run now</button><button class="b small" id="aEdit">edit</button><button class="b small" id="aToggle">${a.enabled ? "disable" : "enable"}</button><button class="b small danger" id="aDelete">delete</button></div></div>
+    <div class="card"><h3>Workflow</h3><div class="hint">Every component of this agent: triggers → steps (deterministic code, TypeSafe decisions, LLM sessions, agent calls) → end → chained agents. Pink edges are routes decided by TypeSafe answers. Nodes light up while a run executes.</div><div id="agentDiagram"></div><div class="rowbtns"><button class="b small" id="aMermaid">copy as Mermaid</button></div></div>
     <div class="card"><h3>Runs (${runs.length})</h3><div class="runs">${runs.length ? runs.map(r => `<div class="run${r.id === runId ? " sel" : ""}" data-run="${r.id}"><span class="st ${r.status}">${r.status}</span><span>${new Date(r.startedAt).toLocaleString()} · ${r.trigger.type}${r.trigger.from ? " ← " + esc(r.trigger.from) : ""}${r.output ? " · " + esc(r.output.split("\n")[0].slice(0, 70)) : r.error ? " · " + esc(r.error.slice(0, 70)) : ""}</span><span class="hint">${r.toolCalls} tools${r.reflexBlocks ? " · " + r.reflexBlocks + " blocked" : ""}${r.endedAt ? " · " + Math.round((r.endedAt - r.startedAt) / 1000) + "s" : ""}</span></div>`).join("") : `<div class="fs-empty">no runs yet</div>`}</div></div>
     <div class="card" id="runCard" style="display:none"><h3 id="runTitle">run</h3><div class="rowbtns"><button class="b small" id="runCancel">cancel run</button></div><div id="runChat" style="display:flex;flex-direction:column;gap:6px"></div><div class="rowbtns"><button class="b small" id="runMin">minimize ▾</button></div></div>`;
   $("#aRun").onclick = async () => { const input = await askText(`Run ${a.name}`, "input for {{input}} (optional)", ""); if (input === null) return; const { runId } = await api(`/api/agents/${a.id}/run`, { method: "POST", body: JSON.stringify({ input }), headers: { "Content-Type": "application/json" } }); setTimeout(() => openAgent(a.id, runId), 400); };
+  drawDiagram(state.agentDiagram, $("#agentDiagram"));
+  $("#aMermaid").onclick = () => copyText(state.agentMermaid || "");
   $("#aEdit").onclick = () => { state.editing = true; renderAgent(); };
   $("#aToggle").onclick = async () => { await api(`/api/agents/${a.id}/toggle`, { method: "POST" }); openAgent(a.id); };
   $("#aDelete").onclick = async () => { const ok = await askText(`Delete agent "${a.name}"?`, "type the agent id to confirm", ""); if (ok !== a.id) return; await api(`/api/agents/${a.id}`, { method: "DELETE" }); state.agent = null; refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; };
@@ -793,15 +856,17 @@ function openRun(agentId, runId) {
   let replayed = false; // false while the historical log replays; events after replay_done are live
   state.runEs = new EventSource(`/api/agents/${agentId}/runs/${runId}/events?token=${TOKEN}`);
   state.runEs.onmessage = (m) => { const ev = JSON.parse(m.data);
+    if (ev.type === "run_start") { resetDiagramStatus(); if (!state.agent?.steps?.length) setDiagramStatus("prompt", "running"); }
     if (ev.type === "run_start") v.items.push({ kind: "reflex", text: `▶ ${ev.run.trigger.type}${ev.run.input ? " · input: " + ev.run.input.slice(0, 200) : ""}\nprompt: ${ev.run.prompt.slice(0, 300)}` });
     else if (ev.type === "run_end") {
+      if (!state.agent?.steps?.length) { setDiagramStatus("prompt", ev.run.status === "succeeded" ? "ok" : "failed"); if (ev.run.status === "succeeded") setDiagramStatus("__end", "ok"); }
       v.items.push({ kind: "reflex", text: `■ ${ev.run.status} · ${ev.run.toolCalls} tools · ${ev.run.reflexBlocks} reflex blocks · ${Math.round(ev.run.durationMs / 1000)}s${ev.run.error ? "\n" + ev.run.error : ""}` });
       $("#runCancel").style.display = "none"; state.runEs.close(); paintRun(v);
       if (replayed) setTimeout(() => openAgent(agentId, runId), 300); // a live run just finished → refresh the runs list
       return;
     }
-    else if (ev.type === "step_start") v.items.push({ kind: ev.stepType === "decide" ? "typesafe" : "reflex", text: `▶ ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" ${ev.summary || ""}` });
-    else if (ev.type === "step_end") v.items.push({ kind: ev.stepType === "decide" ? "typesafe" : "reflex", text: `${ev.ok ? "✓" : "✗"} ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" · ${ev.ms}ms${ev.next ? " → " + ev.next : ""}${ev.result && ev.result.answers ? " · " + Object.entries(ev.result.answers).map(([k, a]) => k + " = " + (a.choice !== undefined ? a.choice + " (" + Math.round(a.confidence * 100) + "% conf)" : a.noul !== undefined ? Math.round(a.noul * 100) + "%" : a.score !== undefined ? a.score.toFixed(2) + " (" + Math.round(a.confidence * 100) + "% conf)" : "")).join(" · ") : ""}${ev.result && ev.result.exitCode !== undefined ? " · exit " + ev.result.exitCode : ""}` });
+    else if (ev.type === "step_start") { setDiagramStatus(ev.id, "running"); v.items.push({ kind: ev.stepType === "decide" ? "typesafe" : "reflex", text: `▶ ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" ${ev.summary || ""}` }); }
+    else if (ev.type === "step_end") { setDiagramStatus(ev.id, ev.ok ? "ok" : "failed"); if (ev.next === "end") setDiagramStatus("__end", "ok"); v.items.push({ kind: ev.stepType === "decide" ? "typesafe" : "reflex", text: `${ev.ok ? "✓" : "✗"} ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" · ${ev.ms}ms${ev.next ? " → " + ev.next : ""}${ev.result && ev.result.answers ? " · " + Object.entries(ev.result.answers).map(([k, a]) => k + " = " + (a.choice !== undefined ? a.choice + " (" + Math.round(a.confidence * 100) + "% conf)" : a.noul !== undefined ? Math.round(a.noul * 100) + "%" : a.score !== undefined ? a.score.toFixed(2) + " (" + Math.round(a.confidence * 100) + "% conf)" : "")).join(" · ") : ""}${ev.result && ev.result.exitCode !== undefined ? " · exit " + ev.result.exitCode : ""}` }); }
     else if (ev.type === "run_closed") { $("#runCancel").style.display = "none"; state.runEs.close(); return; }
     else if (ev.type === "replay_done") { replayed = true; }
     else handle(key, ev);
@@ -1113,11 +1178,13 @@ function openArtifactDeploy(id, did) {
   const stepEl = {};
   const paintStep = (s) => { let el = stepEl[s.id]; if (!el) { el = document.createElement("span"); stepEl[s.id] = el; steps.appendChild(el); } el.textContent = `${s.status === "ok" ? "✓" : s.status === "failed" ? "✗" : s.status === "running" ? "▶" : s.status === "skipped" ? "–" : "·"} ${s.label}`; el.title = s.detail || ""; el.style.borderColor = s.status === "ok" ? "var(--green)" : s.status === "failed" ? "#c0392b" : s.status === "running" ? "var(--pink)" : "var(--line)"; el.style.opacity = s.status === "skipped" ? ".5" : "1"; };
   state.artEs = new EventSource(`/api/artifacts/${id}/deploys/${did}/events?token=${TOKEN}`);
+  let replayed = false; // events before replay_done are history; only a live deploy_end should refresh the page
   state.artEs.onmessage = (m) => { const ev = JSON.parse(m.data);
+    if (ev.type === "replay_done") { replayed = true; return; }
     if (ev.type === "deploy_start") ev.deploy.steps.forEach(paintStep);
     else if (ev.type === "step") { paintStep(ev.step); if (ev.step.detail && ev.step.status !== "running") { log.textContent += `${ev.step.status === "ok" ? "✓" : ev.step.status === "failed" ? "✗" : "–"} ${ev.step.label} · ${ev.step.detail}\n`; } }
     else if (ev.type === "log") log.textContent += `  ${ev.line}\n`;
-    else if (ev.type === "deploy_end") { log.textContent += `■ ${ev.deploy.status}${ev.deploy.frontendUrl ? " · " + ev.deploy.frontendUrl : ""}${ev.deploy.error ? "\n" + ev.deploy.error : ""}\n`; state.artEs.close(); setTimeout(() => openArtifact(id), 500); }
+    else if (ev.type === "deploy_end") { log.textContent += `■ ${ev.deploy.status}${ev.deploy.frontendUrl ? " · " + ev.deploy.frontendUrl : ""}${ev.deploy.error ? "\n" + ev.deploy.error : ""}\n`; state.artEs.close(); if (replayed) setTimeout(() => openArtifact(id, did), 500); }
     else if (ev.type === "deploy_closed") state.artEs.close();
     log.scrollTop = log.scrollHeight; };
 }

@@ -57,6 +57,15 @@ export async function runAgentCli(args: string[]): Promise<void> {
 			for (const t of a.triggers) if (t.type === "webhook") console.log(`webhook: POST http://127.0.0.1:7331/hooks/${a.id}/${t.secret}`);
 			return;
 		}
+		case "diagram": {
+			if (!rest[0]) throw new Error("usage: reflex agent diagram <id>   (prints a Mermaid flowchart: trigger → shell / TypeSafe decide / LLM / call → end → chain)");
+			const { loadAgent: load } = await import("./store.js");
+			const a = load(rest[0]);
+			if (!a) throw new Error(`unknown agent ${rest[0]}`);
+			const { agentDiagram, toMermaid } = await import("./diagram.js");
+			console.log(toMermaid(agentDiagram(a)));
+			return;
+		}
 		case "delete": {
 			if (!rest[0]) throw new Error("usage: reflex agent delete <id>");
 			deleteAgent(rest[0]);

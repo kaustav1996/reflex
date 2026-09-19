@@ -134,6 +134,14 @@ steps' `run`, `state`, `prompt`.
 ]
 ```
 
+### The diagram
+
+Every agent has a workflow diagram in the Agents tab (and `reflex agent diagram <id>` prints it
+as Mermaid): triggers → each step coloured by kind (green = deterministic `shell`, pink =
+TypeSafe `decide`, magenta = `llm`, teal = `call`) → end → chained agents, with pink edges for
+routes decided by TypeSafe answers. Use "preview diagram" in the editor while designing, and
+check that expensive nodes (llm) sit behind a decide gate and side effects come last.
+
 ### Ordering activities
 
 Order steps so the cheap and certain things run first and the expensive or consequential

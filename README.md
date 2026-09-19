@@ -147,7 +147,10 @@ Agents can be **workflows** instead of one prompt, with steps in a fixed priorit
 2. `decide`: a TypeSafe question over the collected state, routing on thresholds;
 3. `llm`: a headless Reflex session, only for generation or open-ended reasoning;
 
-plus `call` (another agent) and `end`. Routing is data
+plus `call` (another agent) and `end`. Every agent has a **workflow diagram** in the Agents tab
+(triggers, steps coloured by kind, routes decided by TypeSafe in pink, chained agents), which
+lights up node by node while a run executes; `reflex agent diagram <id>` prints it as Mermaid.
+Routing is data
 (`route: [{ "when": "verdict.failed.noul >= 0.6", "next": "fix" }]`) and every step's result is a
 variable for later steps. Ask any session to build one; the bundled `reflex-agents` skill teaches
 the model the format, the ladder and how to order activities.
