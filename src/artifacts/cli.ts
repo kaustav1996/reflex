@@ -18,9 +18,10 @@ export async function runArtifactCli(args: string[]): Promise<void> {
 	if (sub === "config") {
 		const gh = githubAuth();
 		const c = artifactsConfig(gh ? { ok: true, source: gh.source } : undefined);
-		console.log(`frontend (Netlify): ${c.frontend.ok ? `ok · ${c.frontend.domain}` : `missing ${c.frontend.missing.join(", ")}`}`);
-		console.log(`backend (Render):   ${c.backend.ok ? `ok · region ${c.backend.region}` : `missing ${c.backend.missing.join(", ")}`}`);
+		console.log(`frontend (Netlify): ${c.frontend.ok ? `ok · ${c.frontend.source === "cli" ? "CLI login" : "env token"}${c.frontend.account ? ` (${c.frontend.account})` : ""} · sites at <name>.${c.frontend.domain ?? "netlify.app"}` : `missing ${c.frontend.missing.join(", ")}`}`);
+		console.log(`backend (Render):   ${c.backend.ok ? `ok · ${c.backend.source === "cli" ? "CLI login" : "env token"}${c.backend.account ? ` (${c.backend.account})` : ""} · region ${c.backend.region}` : `missing ${c.backend.missing.join(", ")}`}`);
 		console.log(`github:             ${c.github.ok ? `ok · ${c.github.source}` : `missing ${c.github.missing.join(", ")}`}`);
+		for (const cli of c.cli) console.log(`  ${cli.cli.padEnd(8)} ${cli.installed ? (cli.loggedIn ? `logged in${cli.account ? ` (${cli.account})` : ""}` : `installed, not logged in → ${cli.login}`) : `not installed → ${cli.install}`}`);
 		return;
 	}
 	if (sub === "deploy") {

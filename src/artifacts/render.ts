@@ -8,6 +8,7 @@
  */
 import { type Heartbeat, json, sleep } from "./http.js";
 import type { BackendSpec } from "./manifest.js";
+import { type AuthSource, renderOwnerId, resolveRender } from "./providers.js";
 
 const API = "https://api.render.com/v1";
 const INFLIGHT = new Set(["created", "queued", "build_in_progress", "update_in_progress", "pre_deploy_in_progress"]);
@@ -22,14 +23,17 @@ export interface RenderService {
 export class Render {
 	constructor(
 		private token: string,
-		private ownerId: string,
+		public ownerId: string,
 		public region: string,
+		public source: AuthSource = "env",
 	) {}
 
-	static fromEnv(regionOverride?: string): Render {
-		const { RENDER_API_KEY, RENDER_OWNER_ID } = process.env;
-		if (!RENDER_API_KEY || !RENDER_OWNER_ID) throw new Error("backend deploys need RENDER_API_KEY and RENDER_OWNER_ID (the tea-… workspace id)");
-		return new Render(RENDER_API_KEY, RENDER_OWNER_ID.split(/\s/)[0], regionOverride || process.env.RENDER_REGION || "singapore");
+	/** Token from the render CLI login (or RENDER_API_KEY); workspace from the CLI, RENDER_OWNER_ID, or the API. */
+	static async resolve(regionOverride?: string): Promise<Render> {
+		const auth = resolveRender();
+		if (!auth) throw new Error("backend deploys need a Render login: run `render login` (or set RENDER_API_KEY)");
+		const owner = await renderOwnerId(auth);
+		return new Render(auth.token, owner, regionOverride || process.env.RENDER_REGION || "singapore", auth.source);
 	}
 
 	serviceName(slug: string): string {

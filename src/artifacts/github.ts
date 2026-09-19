@@ -1,8 +1,14 @@
 /**
  * GitHub: Render can only build from a git repo (or a registry image), so a fullstack artifact's
- * code is pushed to a repo named reflex-artifact-<slug>. Token comes from GITHUB_TOKEN, else
- * GITHUB_ORG_TOKEN, else `gh auth token` (your gh login). The repo is public unless
- * ARTIFACTS_REPO_PRIVATE=true — Render only reads private repos when its GitHub app is connected.
+ * code is pushed to a repo named reflex-artifact-<slug>.
+ *
+ * Reflex runs on your machine, so it uses the GitHub login your machine already has: the `gh`
+ * CLI (`gh auth login`) comes first. Environment tokens (GITHUB_TOKEN, then GITHUB_ORG_TOKEN)
+ * are the fallback for CI or a future remote runner; set ARTIFACTS_GITHUB_AUTH=env to prefer
+ * them even when gh is logged in. The repo owner is the authenticated user unless
+ * ARTIFACTS_GITHUB_OWNER names an org (GITHUB_ORG is honoured only with GITHUB_ORG_TOKEN).
+ * The repo is public unless ARTIFACTS_REPO_PRIVATE=true — Render only reads private repos when
+ * its GitHub app is connected.
  *
  * What gets pushed: the artifact folder minus node_modules, .git, build output, .env* and other
  * secrets. Never the .env.
@@ -21,14 +27,33 @@ export interface GithubAuth {
 	source: "GITHUB_TOKEN" | "GITHUB_ORG_TOKEN" | "gh";
 }
 
-export function githubAuth(): GithubAuth | undefined {
-	if (process.env.GITHUB_TOKEN) return { token: process.env.GITHUB_TOKEN, source: "GITHUB_TOKEN" };
-	if (process.env.GITHUB_ORG_TOKEN) return { token: process.env.GITHUB_ORG_TOKEN, source: "GITHUB_ORG_TOKEN" };
+function ghToken(): GithubAuth | undefined {
 	try {
 		const t = execFileSync("gh", ["auth", "token"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }).trim();
 		if (t) return { token: t, source: "gh" };
 	} catch {}
 	return undefined;
+}
+
+function envToken(): GithubAuth | undefined {
+	if (process.env.GITHUB_TOKEN) return { token: process.env.GITHUB_TOKEN, source: "GITHUB_TOKEN" };
+	if (process.env.GITHUB_ORG_TOKEN) return { token: process.env.GITHUB_ORG_TOKEN, source: "GITHUB_ORG_TOKEN" };
+	return undefined;
+}
+
+export function githubAuth(): GithubAuth | undefined {
+	const preferEnv = /^(env|token)$/i.test(process.env.ARTIFACTS_GITHUB_AUTH ?? "");
+	return preferEnv ? (envToken() ?? ghToken()) : (ghToken() ?? envToken());
+}
+
+/** The login `gh` is signed in as, for status displays. */
+export function ghLogin(): string | undefined {
+	try {
+		const out = execFileSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 8000 }).trim();
+		return out || undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export class Github {
@@ -39,8 +64,9 @@ export class Github {
 
 	static async fromEnv(): Promise<{ gh: Github; source: GithubAuth["source"] }> {
 		const auth = githubAuth();
-		if (!auth) throw new Error("backend deploys need a GitHub token to push the code Render builds: set GITHUB_TOKEN, or run `gh auth login`");
-		const gh = new Github(auth.token, process.env.GITHUB_ORG || undefined);
+		if (!auth) throw new Error("backend deploys push the code Render builds to a GitHub repo: run `gh auth login` on this machine (or set GITHUB_TOKEN for CI)");
+		const owner = process.env.ARTIFACTS_GITHUB_OWNER || (auth.source === "GITHUB_ORG_TOKEN" ? process.env.GITHUB_ORG : undefined) || undefined;
+		const gh = new Github(auth.token, owner);
 		if (!gh.owner) gh.owner = (await json<{ login: string }>(`${API}/user`, { token: gh.token })).login;
 		return { gh, source: auth.source };
 	}
@@ -57,7 +83,7 @@ export class Github {
 		} catch (err) {
 			if (!(err instanceof HttpError && err.status === 404)) throw err;
 		}
-		const isOrg = !!process.env.GITHUB_ORG;
+		const isOrg = !!(process.env.ARTIFACTS_GITHUB_OWNER || process.env.GITHUB_ORG) && this.owner !== (await json<{ login: string }>(`${API}/user`, { token: this.token }).catch(() => ({ login: "" }))).login;
 		const r = await json<{ html_url: string; private: boolean }>(isOrg ? `${API}/orgs/${this.owner}/repos` : `${API}/user/repos`, {
 			method: "POST",
 			token: this.token,

@@ -9,6 +9,7 @@
  * so a fullstack app needs nothing beyond the Netlify token you already configured.
  */
 import { HttpError, type Heartbeat, json, sleep } from "./http.js";
+import { type AuthSource, netlifyAccountSlug, resolveNetlify } from "./providers.js";
 
 const API = "https://api.netlify.com/api/v1";
 export const APPDATA_STORE = "reflex-appdata";
@@ -24,23 +25,27 @@ export interface NetlifySite {
 
 export class Netlify {
 	constructor(
-		private token: string,
+		public readonly token: string,
 		private accountSlug: string,
-		public domain: string,
+		/** Custom base domain (on Netlify DNS). Undefined → sites live at rx-<slug>.netlify.app. */
+		public domain: string | undefined,
+		public source: AuthSource = "env",
 	) {}
 
-	static fromEnv(domainOverride?: string): Netlify {
-		const { NETLIFY_API_KEY, NETLIFY_ACCOUNT_SLUG, DEPLOY_DOMAIN } = process.env;
-		const domain = domainOverride || DEPLOY_DOMAIN;
-		if (!NETLIFY_API_KEY || !NETLIFY_ACCOUNT_SLUG || !domain) throw new Error("frontend deploys need NETLIFY_API_KEY, NETLIFY_ACCOUNT_SLUG and DEPLOY_DOMAIN");
-		return new Netlify(NETLIFY_API_KEY, NETLIFY_ACCOUNT_SLUG.split(/\s/)[0], domain.replace(/^https?:\/\//, "").replace(/\/$/, ""));
+	/** Token from the netlify CLI login (or NETLIFY_API_KEY), account from the API unless NETLIFY_ACCOUNT_SLUG is set. */
+	static async resolve(domainOverride?: string): Promise<Netlify> {
+		const auth = resolveNetlify();
+		if (!auth) throw new Error("frontend deploys need a Netlify login: run `netlify login` (or set NETLIFY_API_KEY)");
+		const domain = (domainOverride || process.env.DEPLOY_DOMAIN || "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+		const slug = await netlifyAccountSlug(auth.token);
+		return new Netlify(auth.token, slug, domain && domain !== "netlify.app" ? domain : undefined, auth.source);
 	}
 
 	siteName(slug: string): string {
 		return `rx-${slug}`; // Netlify site names are global across all of Netlify
 	}
 	hostname(slug: string): string {
-		return `${slug}.${this.domain}`;
+		return this.domain ? `${slug}.${this.domain}` : `${this.siteName(slug)}.netlify.app`;
 	}
 
 	async findSite(slug: string): Promise<NetlifySite | undefined> {
@@ -54,11 +59,11 @@ export class Netlify {
 		const hostname = this.hostname(slug);
 		let site = await this.findSite(slug);
 		if (!site) {
-			site = await json<NetlifySite>(`${API}/${this.accountSlug}/sites`, { method: "POST", token: this.token, body: JSON.stringify({ name, custom_domain: hostname, processing_settings: { skip: true } }) });
-		} else if (site.custom_domain !== hostname) {
+			site = await json<NetlifySite>(`${API}/${this.accountSlug}/sites`, { method: "POST", token: this.token, body: JSON.stringify({ name, ...(this.domain ? { custom_domain: hostname } : {}), processing_settings: { skip: true } }) });
+		} else if (this.domain && site.custom_domain !== hostname) {
 			site = await json<NetlifySite>(`${API}/sites/${site.id}`, { method: "PATCH", token: this.token, body: JSON.stringify({ custom_domain: hostname }) });
 		}
-		if (!site.ssl) await this.provisionTls(site.id);
+		if (this.domain && !site.ssl) await this.provisionTls(site.id);
 		return site;
 	}
 

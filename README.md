@@ -160,13 +160,19 @@ reflex jev --state "Activity: check the build log for new warnings" \
 ## Artifacts: deploy with your own accounts
 
 `reflex artifact deploy <folder>`, the Artifacts tab, or the `deploy_artifact` tool publishes an
-app under `<name>.<your domain>` using your own Netlify, Render and GitHub accounts.
+app using your own Netlify, Render and GitHub accounts. Reflex runs on your machine, so it uses
+the logins your machine already has and asks for nothing else:
 
-| Part | Variables |
+| Part | Comes from |
 |---|---|
-| Frontend, a Netlify site at `<name>.<DEPLOY_DOMAIN>` | `NETLIFY_API_KEY`, `NETLIFY_ACCOUNT_SLUG`, `DEPLOY_DOMAIN` (a zone on Netlify DNS) |
-| Backend, a free Render web service | `RENDER_API_KEY`, `RENDER_OWNER_ID`, optional `RENDER_REGION` |
-| Backend source, since Render builds from git | `GITHUB_TOKEN` or a `gh auth login`; `ARTIFACTS_REPO_PRIVATE=true` for private repos |
+| Frontend, a Netlify site at `rx-<name>.netlify.app` or `<name>.<DEPLOY_DOMAIN>` | `netlify login` (the CLI's saved session); optional `DEPLOY_DOMAIN` for your own domain on Netlify DNS |
+| Backend, a free Render web service | `render login` (the CLI's saved session and active workspace); optional `RENDER_REGION` |
+| Backend source, since Render builds from git | `gh auth login`; `ARTIFACTS_REPO_PRIVATE=true` for private repos |
+
+When something is not connected, `deploy_artifact` and the Artifacts tab offer the CLI login
+(browser consent, nothing to paste) and only then a token as a fallback. Tokens
+(`NETLIFY_API_KEY`, `RENDER_API_KEY`, `GITHUB_TOKEN`) are for CI or a future remote runner and
+live in `~/.reflex/.env`; set `ARTIFACTS_<PROVIDER>_AUTH=env` to prefer them over a CLI login.
 
 The pipeline is deterministic and streamed step by step: read or detect the manifest, push the
 backend to GitHub, create or update the Render service, deploy the pinned commit, wait for

@@ -36,7 +36,8 @@ import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/clien
 import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
-import { githubAuth } from "../artifacts/github.js";
+import { ghLogin, githubAuth } from "../artifacts/github.js";
+import { type ProviderName, startCliLogin } from "../artifacts/providers.js";
 import { artifactsConfig, deployLogPath, listArtifacts, listDeploys, loadArtifact, loadDeploy } from "../artifacts/store.js";
 import { writeSecret } from "../extensions/secrets/store.js";
 import { rememberSecret } from "../extensions/secrets/index.js";
@@ -45,7 +46,7 @@ import { saveArtifact } from "../artifacts/store.js";
 
 function artifactsCfgFor() {
 	const gh = githubAuth();
-	return artifactsConfig(gh ? { ok: true, source: gh.source } : undefined);
+	return artifactsConfig(gh ? { ok: true, source: gh.source, owner: gh.source === "gh" ? ghLogin() : undefined } : undefined);
 }
 import { getPiAgentDir } from "../config.js";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
@@ -633,10 +634,13 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				return json(res, 200, { name: skm[1], path: dir, content: readFileSync(join(dir, "SKILL.md"), "utf8").slice(0, 200_000), files: files.slice(0, 200) });
 			}
 			// ---- artifacts: deployable apps under <slug>.<DEPLOY_DOMAIN> ----
-			const artifactsCfg = () => {
-				const gh = githubAuth();
-				return artifactsConfig(gh ? { ok: true, source: gh.source } : undefined);
-			};
+			const artifactsCfg = artifactsCfgFor;
+			if (url.pathname === "/api/artifacts/cli-login" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { provider?: ProviderName };
+				if (!body.provider || !["netlify", "render", "github"].includes(body.provider)) return json(res, 400, { error: "provider required" });
+				const r = startCliLogin(body.provider);
+				return json(res, 200, r);
+			}
 			if (url.pathname === "/api/artifacts" && req.method === "GET") {
 				return json(res, 200, { config: artifactsCfg(), artifacts: listArtifacts().map((a) => ({ ...a, live: liveDeploy(a.id)?.id ?? null })) });
 			}

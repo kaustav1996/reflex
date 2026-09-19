@@ -252,7 +252,7 @@ async function plausibilityCheck(ctx: ExtensionContext, reflex: ReflexState | un
 // The form: masked TUI component, or a JSON-described form for the web client.
 // ---------------------------------------------------------------------------
 
-async function showForm(ctx: ExtensionContext, spec: SecretFormSpec): Promise<FormResult> {
+export async function showForm(ctx: ExtensionContext, spec: SecretFormSpec): Promise<FormResult> {
 	if (ctx.mode === "tui") {
 		return ctx.ui.custom<FormResult>((tui, theme, _kb, done) => new SecretForm(tui, theme, spec, done));
 	}

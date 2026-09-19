@@ -7,11 +7,78 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../../artifacts/deploy.js";
-import { githubAuth } from "../../artifacts/github.js";
+import { ghLogin, githubAuth } from "../../artifacts/github.js";
+import { type ProviderName, startCliLogin, waitForCliLogin } from "../../artifacts/providers.js";
+import { showForm } from "../secrets/index.js";
+import { writeSecret } from "../secrets/store.js";
+import { getReflexHome } from "../../config.js";
+import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { artifactsConfig, listArtifacts, listDeploys } from "../../artifacts/store.js";
 import { loadDotEnv } from "../../config.js";
 import { clip } from "../typesafe/context.js";
 import type { ReflexState } from "../typesafe/state.js";
+
+const TOKEN_FIELDS: Record<ProviderName, Array<{ name: string; description: string; required?: boolean; placeholder?: string }>> = {
+	netlify: [
+		{ name: "NETLIFY_API_KEY", description: "Netlify personal access token (User settings → Applications → Personal access tokens)", placeholder: "nfp_…" },
+		{ name: "NETLIFY_ACCOUNT_SLUG", description: "Optional: team slug from app.netlify.com/teams/<slug>; blank = your default account", required: false },
+		{ name: "DEPLOY_DOMAIN", description: "Optional: a domain on Netlify DNS for <name>.<domain>; blank = <name>.netlify.app", required: false },
+	],
+	render: [
+		{ name: "RENDER_API_KEY", description: "Render API key (Account settings → API keys)", placeholder: "rnd_…" },
+		{ name: "RENDER_OWNER_ID", description: "Optional: workspace id (tea-…); blank = your first team", required: false },
+	],
+	github: [{ name: "GITHUB_TOKEN", description: "GitHub token with repo scope (only if you cannot use `gh auth login`)", placeholder: "ghp_… or github_pat_…" }],
+};
+const LABEL: Record<ProviderName, string> = { netlify: "Netlify", render: "Render", github: "GitHub" };
+
+/**
+ * Make one provider usable: offer the machine's CLI login first (no token to paste), a pasted
+ * token second. Returns true when the provider is connected afterwards.
+ */
+async function connectProvider(ctx: ExtensionContext, provider: ProviderName, getReflex: () => ReflexState | undefined, onLine: (l: string) => void): Promise<boolean> {
+	const probe = () => {
+		const a = githubAuth();
+		return a ? { source: a.source, login: a.source === "gh" ? ghLogin() : undefined } : undefined;
+	};
+	const status = () => artifactsConfig(probe() ? { ok: true, source: probe()!.source } : undefined);
+	const ok = () => {
+		const c = status();
+		return provider === "netlify" ? c.frontend.ok : provider === "render" ? c.backend.ok : c.github.ok;
+	};
+	if (ok()) return true;
+	const cli = status().cli.find((c) => c.provider === provider)!;
+	const cliLabel = cli.installed ? `Log in with the ${cli.cli} CLI (opens your browser; nothing to paste)` : `Install the ${cli.cli} CLI (${cli.install}) and log in`;
+	const choice = await ctx.ui.select(`${LABEL[provider]} is not connected on this machine. How do you want to connect it?`, [cliLabel, `Paste a ${LABEL[provider]} API token (stored in ~/.reflex/.env, never in chat)`, "Cancel"]);
+	if (!choice || choice === "Cancel") return false;
+	if (choice === cliLabel) {
+		if (!cli.installed && provider !== "netlify") {
+			ctx.ui.notify(`Install it first: ${cli.install}   then run: ${cli.login}`, "warning");
+			return false;
+		}
+		const started = startCliLogin(provider, onLine);
+		ctx.ui.notify(started.how === "spawned" ? `Running ${started.command}: finish the login in the browser tab that opens…` : started.how === "terminal" ? `Opened a Terminal window running ${started.command}; finish the login there and in your browser…` : `Run this in a terminal, then come back: ${started.command}`, "info");
+		getReflex()?.record("artifact", `connect ${provider} via CLI (${started.how})`);
+		const st = await waitForCliLogin(provider, probe);
+		if (!st.loggedIn) {
+			ctx.ui.notify(`${LABEL[provider]} still isn't logged in (waited 4 minutes). Run ${started.command} in a terminal and retry.`, "warning");
+			return false;
+		}
+		ctx.ui.notify(`${LABEL[provider]} connected via ${cli.cli}${st.account ? ` (${st.account})` : ""}.`, "info");
+		return true;
+	}
+	const fields = TOKEN_FIELDS[provider].map((f) => ({ ...f, required: f.required !== false }));
+	const res = await showForm(ctx, { reason: `${LABEL[provider]} token for artifact deploys`, destination: "~/.reflex/.env", fields, warnings: [] });
+	if (res.cancelled) return false;
+	for (const f of fields) {
+		const v = (res.values[f.name] ?? "").trim();
+		if (!v) continue;
+		writeSecret(join(getReflexHome(), ".env"), f.name, v);
+		process.env[f.name] = v;
+	}
+	return ok();
+}
 
 export function createArtifactsExtension(getReflex: () => ReflexState | undefined): (pi: ExtensionAPI) => void {
 	return (pi) => {
@@ -23,6 +90,7 @@ export function createArtifactsExtension(getReflex: () => ReflexState | undefine
 			promptSnippet: "Deploy an app folder as a hosted artifact (Netlify frontend, Render backend)",
 			promptGuidelines: [
 				"When the user asks to deploy, publish, host or share an app, call deploy_artifact with its folder instead of explaining deployment steps. Check the result's step list and fix build errors before retrying.",
+				"Provider access comes from the machine's own CLI logins (netlify, render, gh); deploy_artifact offers the login flow itself when something is missing. Never request Netlify, Render or GitHub tokens with request_secrets.",
 				"Apps that need a database should use SQLite via DATABASE_URL (sqlite:///./data.db); the backend must expose GET /health and bind 0.0.0.0:$PORT; the frontend reads the API base URL from VITE_API_URL (or the toolchain's equivalent). Read the reflex-artifacts skill for details.",
 			],
 			parameters: Type.Object({
@@ -32,22 +100,29 @@ export function createArtifactsExtension(getReflex: () => ReflexState | undefine
 			async execute(_id, params, _signal, onUpdate, ctx) {
 				const rec = registerArtifact(params.dir ?? ctx.cwd, params.name);
 				loadDotEnv(params.dir ?? ctx.cwd); // pick up defaults saved in Settings → Artifacts after this session started
-				const cfg = artifactsConfig();
-				const target = `${rec.id}.${cfg.frontend.domain ?? "<DEPLOY_DOMAIN>"}`;
-				if (!cfg.frontend.ok) throw new Error(`artifacts are not configured: set ${cfg.frontend.missing.join(", ")} (Artifacts tab in reflex web, or ~/.reflex/.env)`);
-				if (rec.manifest.kind === "fullstack" && !cfg.backend.ok) throw new Error(`this app has a backend (${rec.manifest.backend?.dir}); set ${cfg.backend.missing.join(", ")} to deploy it`);
-				if (rec.manifest.kind === "fullstack" && !githubAuth()) throw new Error("backend deploys push the code to a GitHub repo for Render to build: set GITHUB_TOKEN or run `gh auth login`");
+				const lines: string[] = [];
+				const push = (l: string) => {
+					lines.push(l);
+					onUpdate?.({ content: [{ type: "text", text: lines.slice(-40).join("\n") }], details: { lines: lines.slice(-40) } });
+				};
+				// Connect what is missing, CLI logins first. Headless runs can only report.
+				const needed: ProviderName[] = ["netlify", ...(rec.manifest.kind === "fullstack" ? (["render", "github"] as ProviderName[]) : [])];
+				for (const p of needed) {
+					if (ctx.hasUI) {
+						if (!(await connectProvider(ctx, p, getReflex, push))) return { content: [{ type: "text", text: `${LABEL[p]} is not connected; the user did not complete the connection. Nothing was deployed. Do not ask for tokens in chat: the user can run the ${p === "github" ? "gh" : p} CLI login or use the Artifacts tab.` }], details: { cancelled: true } };
+					}
+				}
+				const cfg = artifactsConfig(githubAuth() ? { ok: true, source: githubAuth()!.source } : undefined);
+				const target = cfg.frontend.domain ? `${rec.id}.${cfg.frontend.domain}` : `rx-${rec.id}.netlify.app`;
+				if (!cfg.frontend.ok) throw new Error(`artifacts need ${cfg.frontend.missing.join(", ")} (Artifacts tab in reflex web, or ~/.reflex/.env)`);
+				if (rec.manifest.kind === "fullstack" && !cfg.backend.ok) throw new Error(`this app has a backend (${rec.manifest.backend?.dir}); it needs ${cfg.backend.missing.join(", ")}`);
+				if (rec.manifest.kind === "fullstack" && !cfg.github.ok) throw new Error(`backend deploys push the code to a GitHub repo for Render to build: ${cfg.github.missing.join(", ")}`);
 				if (liveDeploy(rec.id)) throw new Error(`artifact ${rec.id} is already deploying`);
 				if (ctx.hasUI) {
 					const ok = await ctx.ui.confirm(`Deploy ${rec.name} → https://${target}?`, `${rec.manifest.kind} app from ${rec.dir}${rec.manifest.backend ? ` · backend ${rec.manifest.backend.dir} → Render (public GitHub repo unless ARTIFACTS_REPO_PRIVATE=true)` : ""}`);
 					if (!ok) return { content: [{ type: "text", text: "The user declined the deploy. Do not retry unless asked." }], details: { cancelled: true } };
 				}
 				getReflex()?.record("artifact", `deploy ${rec.id} (${rec.manifest.kind}) → ${target}`);
-				const lines: string[] = [];
-				const push = (l: string) => {
-					lines.push(l);
-					onUpdate?.({ content: [{ type: "text", text: lines.slice(-40).join("\n") }], details: { lines: lines.slice(-40) } });
-				};
 				const d = await deployArtifact(rec.id, {
 					trigger: "agent",
 					onEvent: (ev) => {

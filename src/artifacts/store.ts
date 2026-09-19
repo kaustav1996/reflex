@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { getReflexHome } from "../config.js";
 import type { Manifest } from "./manifest.js";
+import { type AuthSource, type CliStatus, cliStatuses, resolveNetlify, resolveRender } from "./providers.js";
 
 export interface ArtifactRecord {
 	id: string;
@@ -150,19 +151,22 @@ export function artifactSlug(name: string): string {
 // ---------------------------------------------------------------------------
 
 export interface ArtifactsConfig {
-	frontend: { ok: boolean; missing: string[]; domain?: string; accountSlug?: string };
-	backend: { ok: boolean; missing: string[]; region: string };
+	frontend: { ok: boolean; source?: AuthSource; account?: string; missing: string[]; domain?: string };
+	backend: { ok: boolean; source?: AuthSource; account?: string; missing: string[]; region: string };
 	github: { ok: boolean; source?: "GITHUB_TOKEN" | "GITHUB_ORG_TOKEN" | "gh"; owner?: string; missing: string[] };
+	/** Local CLIs: installed / logged in, and how to log in. */
+	cli: CliStatus[];
 }
 
+/** What is available right now: CLI logins first, env tokens second. Cheap (no network). */
 export function artifactsConfig(githubProbe?: { ok: boolean; source?: ArtifactsConfig["github"]["source"]; owner?: string }): ArtifactsConfig {
-	const need = (names: string[]) => names.filter((n) => !process.env[n]);
-	const fe = need(["NETLIFY_API_KEY", "NETLIFY_ACCOUNT_SLUG", "DEPLOY_DOMAIN"]);
-	const be = need(["RENDER_API_KEY", "RENDER_OWNER_ID"]);
+	const nf = resolveNetlify();
+	const rd = resolveRender();
 	const gh = githubProbe ?? { ok: false };
 	return {
-		frontend: { ok: fe.length === 0, missing: fe, domain: process.env.DEPLOY_DOMAIN, accountSlug: process.env.NETLIFY_ACCOUNT_SLUG },
-		backend: { ok: be.length === 0, missing: be, region: process.env.RENDER_REGION || "singapore" },
-		github: { ok: gh.ok, source: gh.source, owner: gh.owner, missing: gh.ok ? [] : ["GITHUB_TOKEN (or a `gh auth login`)"] },
+		frontend: { ok: !!nf, source: nf?.source, account: nf?.account, missing: nf ? [] : ["a Netlify login: `netlify login` on this machine (or NETLIFY_API_KEY)"], domain: process.env.DEPLOY_DOMAIN || undefined },
+		backend: { ok: !!rd, source: rd?.source, account: rd?.account, missing: rd ? [] : ["a Render login: `render login` on this machine (or RENDER_API_KEY)"], region: process.env.RENDER_REGION || "singapore" },
+		github: { ok: gh.ok, source: gh.source, owner: gh.owner, missing: gh.ok ? [] : ["a GitHub login: `gh auth login` on this machine (or GITHUB_TOKEN)"] },
+		cli: cliStatuses(gh.ok ? { source: gh.source ?? "env", login: gh.owner } : undefined),
 	};
 }

@@ -8,7 +8,8 @@ description: How to build and deploy Reflex artifacts — apps published at <nam
 An **artifact** is an app folder that Reflex publishes with the user's own accounts:
 
 - the frontend goes to **Netlify** as a site at `https://<name>.<DEPLOY_DOMAIN>`;
-- if the app has a backend, it is pushed to a **GitHub** repo and deployed as a free **Render**
+- if the app has a backend, it is pushed to a **GitHub** repo (using the machine's own
+  `gh auth login`; never ask for a GitHub token in chat) and deployed as a free **Render**
   web service; its URL is injected into the frontend build;
 - a backend's **SQLite** file survives Render's spin-downs: the process runs under a sidecar
   that restores the database on boot and snapshots it to Netlify Blobs whenever it changes.
@@ -16,8 +17,11 @@ An **artifact** is an app folder that Reflex publishes with the user's own accou
 Deploy with the `deploy_artifact` tool (`dir`, optional `name`), or from a shell:
 `reflex artifact deploy <folder> [--name slug]`. The Artifacts tab in `reflex web` lists every
 artifact with its deploys, logs and delete button. `list_artifacts` shows what exists and whether
-deploys are configured. Never paste the user's Netlify/Render/GitHub keys into chat: they belong
-in `~/.reflex/.env` (the Artifacts tab has a form for them).
+deploys are configured.
+
+Credentials come from the machine's own CLI logins (`netlify login`, `render login`,
+`gh auth login`). If one is missing, `deploy_artifact` offers the login flow to the user itself;
+never ask for Netlify, Render or GitHub tokens in chat or through `request_secrets`.
 
 ## Layout the deploy understands (no manifest needed)
 

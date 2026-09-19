@@ -15,6 +15,7 @@ import { Github } from "./github.js";
 import { type Manifest, resolveManifest, sqlitePath } from "./manifest.js";
 import { Netlify } from "./netlify.js";
 import { withPersistence, writeSidecar } from "./persist.js";
+import { resolveNetlify, resolveRender } from "./providers.js";
 import { Render } from "./render.js";
 import { type ArtifactRecord, artifactSlug, artifactsConfig, type DeployRecord, type DeployStep, deployLogPath, loadArtifact, newDeployId, saveArtifact, saveDeploy } from "./store.js";
 
@@ -118,9 +119,10 @@ export async function deployArtifact(id: string, opts: { trigger?: DeployRecord[
 		const cfg = artifactsConfig();
 		if (!cfg.frontend.ok) throw new Error(`frontend deploys need ${cfg.frontend.missing.join(", ")}`);
 		if (manifest.kind === "fullstack" && !cfg.backend.ok) throw new Error(`this app has a backend; backend deploys need ${cfg.backend.missing.join(", ")}`);
+		log(`netlify: ${cfg.frontend.source === "cli" ? `CLI login${cfg.frontend.account ? ` (${cfg.frontend.account})` : ""}` : "env token"}${manifest.kind === "fullstack" ? ` · render: ${cfg.backend.source === "cli" ? "CLI login" : "env token"}` : ""}`);
 		step("manifest", "ok", `${manifest.kind} · ${manifest.source} · frontend ${manifest.frontend.dir} (${manifest.frontend.build || "no build"} → ${manifest.frontend.publish})${manifest.backend ? ` · backend ${manifest.backend.dir} (${manifest.backend.runtime})` : ""}`);
 
-		const netlify = Netlify.fromEnv(rec.settings?.domain);
+		const netlify = await Netlify.resolve(rec.settings?.domain);
 		let backendUrl: string | undefined;
 
 		// 2–5. backend
@@ -140,7 +142,7 @@ export async function deployArtifact(id: string, opts: { trigger?: DeployRecord[
 			step("site", "ok", `${site.name} → ${rec.netlify.customDomain}`);
 			const dbPath = sqlitePath(manifest.backend) ?? "./data.db";
 			rec.appdata = { siteId: site.id, store: "reflex-appdata", key: `${rec.id}.db.gz`, dbPath };
-			const appdata = { url: netlify.blobUrl(site.id, rec.appdata.key), token: process.env.NETLIFY_API_KEY!, dbPath };
+			const appdata = { url: netlify.blobUrl(site.id, rec.appdata.key), token: netlify.token, dbPath };
 			const backendDir = join(rec.dir, manifest.backend.dir);
 			if (!existsSync(backendDir)) throw new Error(`backend dir not found: ${backendDir}`);
 			writeSidecar(backendDir);
@@ -151,7 +153,7 @@ export async function deployArtifact(id: string, opts: { trigger?: DeployRecord[
 
 			current = "service";
 			step("service", "running");
-			const render = Render.fromEnv(rec.settings?.region);
+			const render = await Render.resolve(rec.settings?.region);
 			const svc = await render.ensureService(rec.id, repo.url, spec, spec.env);
 			const envChanged = await render.syncEnv(svc.id, spec.env);
 			rec.render = { serviceId: svc.id, serviceName: svc.name, url: svc.url, repo: repo.url, commit };
@@ -248,12 +250,12 @@ export async function destroyArtifact(id: string, log: (line: string) => void = 
 	const rec = loadArtifact(id);
 	if (!rec) throw new Error(`unknown artifact ${id}`);
 	loadDotEnv(rec.dir);
-	if (rec.render && process.env.RENDER_API_KEY) {
-		await Render.fromEnv(rec.settings?.region).deleteService(rec.render.serviceId);
+	if (rec.render && resolveRender()) {
+		await (await Render.resolve(rec.settings?.region)).deleteService(rec.render.serviceId);
 		log(`deleted Render service ${rec.render.serviceName}`);
 	}
-	if (rec.netlify && process.env.NETLIFY_API_KEY) {
-		const n = Netlify.fromEnv(rec.settings?.domain);
+	if (rec.netlify && resolveNetlify()) {
+		const n = await Netlify.resolve(rec.settings?.domain);
 		if (rec.appdata) await n.deleteBlob(rec.appdata.siteId, rec.appdata.key);
 		await n.deleteSite(rec.netlify.siteId);
 		log(`deleted Netlify site ${rec.netlify.siteName}`);

@@ -1010,9 +1010,10 @@ async function drawSkill(body, s) {
 // ── artifacts: deployable apps under <slug>.<DEPLOY_DOMAIN> ────────────────
 state.artifact = null; state.artifacts = []; state.artCfg = null; state.artEs = null; state.artDeploy = null;
 const ART_VARS = [
-  ["NETLIFY_API_KEY", "Netlify personal access token", "frontend"], ["NETLIFY_ACCOUNT_SLUG", "Netlify team slug (from the team URL)", "frontend"], ["DEPLOY_DOMAIN", "a domain on Netlify DNS, e.g. apps.example.com", "frontend"],
-  ["RENDER_API_KEY", "Render API key", "backend"], ["RENDER_OWNER_ID", "Render workspace id (tea-…)", "backend"], ["GITHUB_TOKEN", "GitHub token with repo scope (or just `gh auth login`)", "github"],
+  ["NETLIFY_API_KEY", "Netlify personal access token (only if you don't use `netlify login`)", "frontend"], ["NETLIFY_ACCOUNT_SLUG", "optional — team slug from app.netlify.com/teams/<slug>; blank = your default account", "frontend"], ["DEPLOY_DOMAIN", "optional — a domain on Netlify DNS for <name>.<domain>; blank = <name>.netlify.app", "frontend"],
+  ["RENDER_API_KEY", "Render API key (only if you don't use `render login`)", "backend"], ["RENDER_OWNER_ID", "optional — workspace id (tea-…); blank = your first team", "backend"], ["GITHUB_TOKEN", "optional — Reflex uses your local `gh auth login` first; set a token only for CI or a remote runner", "github"],
 ];
+const PROVIDERS = [["netlify", "Netlify", "frontend", "frontends"], ["render", "Render", "backend", "backends"], ["github", "GitHub", "github", "backend source repos"]];
 async function refreshArtifacts() {
   const d = await api("/api/artifacts"); state.artifacts = d.artifacts; state.artCfg = d.config;
   const box = $("#artifactsList"); box.innerHTML = "";
@@ -1031,16 +1032,37 @@ function artifactSetup(cfg, withDefaults) {
   const defs = state.artDefaults || {};
   const extra = withDefaults ? `<label>RENDER_REGION<div class="muted">Render region for new backend services</div></label><div><select data-art="RENDER_REGION">${["singapore", "oregon", "ohio", "virginia", "frankfurt"].map(r => `<option ${(defs.RENDER_REGION || "singapore") === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
     <label>ARTIFACTS_REPO_PRIVATE<div class="muted">Create private GitHub repos for backends (Render then needs GitHub access)</div></label><div><select data-art="ARTIFACTS_REPO_PRIVATE"><option value="false" ${defs.ARTIFACTS_REPO_PRIVATE ? "" : "selected"}>false · public repo</option><option value="true" ${defs.ARTIFACTS_REPO_PRIVATE ? "selected" : ""}>true · private repo</option></select></div>` : "";
-  const row = (v, hint, group) => { const ok = !(cfg[group].missing || []).some(m => m.startsWith(v)) && (group !== "github" || cfg.github.ok); return `<label>${v} ${ok ? '<span style="color:var(--green)">✓ set</span>' : '<span class="muted">not set</span>'}<div class="muted">${esc(hint)}</div></label><div><input type="${/KEY|TOKEN/.test(v) ? "password" : "text"}" data-art="${v}" placeholder="${ok ? "set — paste to replace" : ""}" autocomplete="off" spellcheck="false"></div>`; };
+  const provRows = PROVIDERS.map(([id, label, group, what]) => {
+    const g = cfg[group], cli = (cfg.cli || []).find(c => c.provider === id) || {};
+    const how = g.ok ? (g.source === "cli" || (id === "github" && g.source === "gh") ? `✓ ${cli.cli} CLI login${g.account || g.owner ? ` (${esc(g.account || g.owner)})` : ""}` : `✓ env token${g.source ? ` (${esc(g.source)})` : ""}`) : "not connected";
+    const btn = g.ok ? "" : cli.installed ? `<button class="b small primary" data-clilogin="${id}">Log in with ${esc(cli.cli)}</button>` : `<span class="muted">install: <code>${esc(cli.install || "")}</code></span>`;
+    return `<div class="mcp-row" style="grid-template-columns:110px 1fr auto"><b>${label}</b><span class="${g.ok ? "" : "muted"}">${how} <span class="muted">· ${what}</span></span><span>${btn}</span></div>`;
+  }).join("");
+  const row = (v, hint, group) => { const ok = !!process_env_like(cfg, v); return `<label>${v} ${ok ? '<span style="color:var(--green)">✓ set</span>' : ""}<div class="muted">${esc(hint)}</div></label><div><input type="${/KEY|TOKEN/.test(v) ? "password" : "text"}" data-art="${v}" placeholder="${ok ? "set — paste to replace" : ""}" autocomplete="off" spellcheck="false"></div>`; };
   return `<div class="card"><h3>Artifact deploys use your own accounts</h3>
-    <div class="hint">Frontends go to <b>Netlify</b> at <code>&lt;name&gt;.${esc(cfg.frontend.domain || "DEPLOY_DOMAIN")}</code> (the domain must be on Netlify DNS). Backends go to <b>Render</b> (free plan) from a GitHub repo, with a SQLite persistence sidecar that snapshots to Netlify Blobs. Values are stored in ~/.reflex/.env and never shown here.</div>
+    <div class="hint">Frontends go to <b>Netlify</b> at <code>&lt;name&gt;.${esc(cfg.frontend.domain || "netlify.app")}</code>${cfg.frontend.domain ? " (your domain on Netlify DNS)" : " (set DEPLOY_DOMAIN below for your own domain)"}. Backends go to <b>Render</b> (free plan) from a GitHub repo, with a SQLite persistence sidecar that snapshots to Netlify Blobs. Reflex uses the CLI logins already on this machine; tokens are only a fallback.</div>
+    <div style="margin:10px 0">${provRows}</div>
+    <details><summary style="cursor:pointer;font-weight:600">Tokens and options (fallback / advanced)</summary>
     <div class="form" style="margin-top:8px">${ART_VARS.map(([v, h, g]) => row(v, h, g)).join("")}${extra}</div>
-    <div class="rowbtns"><button class="b primary" id="artSave">save</button><span class="hint" id="artMsg">frontend ${cfg.frontend.ok ? "✓" : "needs " + cfg.frontend.missing.join(", ")} · backend ${cfg.backend.ok ? "✓" : "needs " + cfg.backend.missing.join(", ")} · github ${cfg.github.ok ? "✓ " + cfg.github.source : "needs a token or gh login"}</span></div></div>`;
+    <div class="rowbtns"><button class="b primary" id="artSave">save</button><span class="hint">stored in ~/.reflex/.env, never shown here</span></div></details>
+    <div class="hint" id="artMsg" style="margin-top:8px">frontend ${cfg.frontend.ok ? "✓" : "needs " + cfg.frontend.missing.join(", ")} · backend ${cfg.backend.ok ? "✓" : "needs " + cfg.backend.missing.join(", ")} · github ${cfg.github.ok ? "✓ " + cfg.github.source : "needs " + cfg.github.missing.join(", ")}</span></div></div>`;
+}
+function process_env_like(cfg, v) { // which env-backed values are known to be set (the server never returns values)
+  if (v === "DEPLOY_DOMAIN") return !!cfg.frontend.domain; if (v === "NETLIFY_API_KEY") return cfg.frontend.source === "env"; if (v === "RENDER_API_KEY") return cfg.backend.source === "env"; if (v === "GITHUB_TOKEN") return cfg.github.source === "GITHUB_TOKEN"; return false;
 }
 function wireArtifactSetup(root) {
   // Scoped: the same form can exist in the Artifacts tab and in Settings → Artifacts at once.
-  root = root || document; const b = root.querySelector("#artSave"); if (!b) return;
-  b.onclick = async () => { const body = {}; root.querySelectorAll("[data-art]").forEach(i => { if (i.value.trim()) body[i.dataset.art] = i.value.trim(); }); const r = await api("/api/artifacts/config", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }); notice("info", r.saved.length ? `saved ${r.saved.join(", ")}` : "nothing to save"); state.artCfg = r.config; if (state.tab === "settings") loadSettings(); else if (state.artifact) openArtifact(state.artifact.id); else renderArtifactHome(); };
+  root = root || document; const b = root.querySelector("#artSave");
+  if (b) b.onclick = async () => { const body = {}; root.querySelectorAll("[data-art]").forEach(i => { if (i.value.trim()) body[i.dataset.art] = i.value.trim(); }); const r = await api("/api/artifacts/config", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }); notice("info", r.saved.length ? `saved ${r.saved.join(", ")}` : "nothing to save"); state.artCfg = r.config; if (state.tab === "settings") loadSettings(); else if (state.artifact) openArtifact(state.artifact.id); else renderArtifactHome(); };
+  root.querySelectorAll("[data-clilogin]").forEach(btn => btn.onclick = async () => {
+    const provider = btn.dataset.clilogin; btn.disabled = true;
+    const r = await api("/api/artifacts/cli-login", { method: "POST", body: JSON.stringify({ provider }), headers: { "Content-Type": "application/json" } });
+    btn.textContent = r.how === "spawned" ? "finish the login in your browser…" : r.how === "terminal" ? "finish it in the Terminal window…" : `run: ${r.command}`;
+    notice("info", r.how === "manual" ? `Run this in a terminal: ${r.command}` : `Started ${r.command}`);
+    const t0 = Date.now();
+    const poll = async () => { const d = await api("/api/artifacts"); const g = d.config[provider === "github" ? "github" : provider === "netlify" ? "frontend" : "backend"]; if (g.ok) { notice("info", `${provider} connected`); state.artCfg = d.config; if (state.tab === "settings") loadSettings(); else if (state.artifact) openArtifact(state.artifact.id); else renderArtifactHome(); return; } if (Date.now() - t0 < 4 * 60_000) setTimeout(poll, 3000); else { btn.disabled = false; btn.textContent = `Log in (retry)`; } };
+    setTimeout(poll, 3000);
+  });
 }
 function renderArtifactHome() {
   const cfg = state.artCfg; if (!cfg) return;
@@ -1060,6 +1082,7 @@ async function openArtifact(id, deployId) {
   const a = d.artifact, m = a.manifest, cfg = d.config;
   $("#title").textContent = a.name;
   const can = cfg.frontend.ok && (m.kind === "static" || (cfg.backend.ok && cfg.github.ok));
+  const defaultHost = cfg.frontend.domain ? `${a.id}.${cfg.frontend.domain}` : `rx-${a.id}.netlify.app`;
   const url = a.netlify?.url, fb = a.netlify?.fallbackUrl;
   $("#artifactPane").innerHTML = `
     <div class="card"><div class="conn-head"><div><h2 style="margin:0">${esc(a.name)} <span class="chip">${m.kind}</span>${d.live ? ' <span class="chip" style="border-color:var(--pink)">deploying…</span>' : ""}</h2><div class="sub">${esc(a.dir)}</div></div>
@@ -1072,7 +1095,7 @@ async function openArtifact(id, deployId) {
       </div>${can ? "" : `<div class="notice-box" style="border-color:var(--pink)">Deploying needs: ${[...(cfg.frontend.ok ? [] : cfg.frontend.missing), ...(m.kind === "fullstack" && !cfg.backend.ok ? cfg.backend.missing : []), ...(m.kind === "fullstack" && !cfg.github.ok ? cfg.github.missing : [])].join(", ")} — see the setup form below.</div>`}</div>
     <div class="card"><h3>Deploys</h3><div id="artDeploys">${d.deploys.length ? d.deploys.map(x => `<div class="run" data-dep="${x.id}"><span>${x.status === "succeeded" ? "✓" : x.status === "failed" ? "✗" : "▶"} ${x.status}</span><span>${new Date(x.startedAt).toLocaleString()} · ${x.trigger}${x.error ? " · " + esc(x.error.slice(0, 120)) : ""}</span><span class="muted">${x.endedAt ? Math.round((x.endedAt - x.startedAt) / 1000) + "s" : "…"}</span></div>`).join("") : '<span class="hint">no deploys yet</span>'}</div>
       <div id="artDeployCard" style="display:none;margin-top:10px"><div id="artSteps" class="conn-tools"></div><pre class="out" id="artLog" style="display:block;max-height:50vh;overflow:auto"></pre></div></div>
-    <div class="card"><h3>Deploy settings</h3><div class="hint">Blank = use the defaults from Settings → Artifacts (${esc(cfg.frontend.domain || "no domain")}, region ${esc(cfg.backend.region)}).</div>
+    <div class="card"><h3>Deploy settings</h3><div class="hint">Blank = use the defaults from Settings → Artifacts (${esc(cfg.frontend.domain || "netlify.app")}, region ${esc(cfg.backend.region)}); this artifact would publish at <code>${esc(defaultHost)}</code>.</div>
       <div class="form" style="margin-top:8px"><label>domain</label><input id="ovDomain" value="${esc(a.settings?.domain || "")}" placeholder="${esc(cfg.frontend.domain || "DEPLOY_DOMAIN")}"><label>Render region</label><select id="ovRegion"><option value="">default (${esc(cfg.backend.region)})</option>${["singapore", "oregon", "ohio", "virginia", "frankfurt"].map(r => `<option ${a.settings?.region === r ? "selected" : ""}>${r}</option>`).join("")}</select><label>backend repo</label><select id="ovPriv"><option value="">default</option><option value="false" ${a.settings?.repoPrivate === false ? "selected" : ""}>public</option><option value="true" ${a.settings?.repoPrivate === true ? "selected" : ""}>private</option></select></div>
       <div class="rowbtns"><button class="b small" id="ovSave">save</button><span class="hint">applies to the next deploy; changing the domain creates a new site address</span></div></div>
     ${can ? "" : artifactSetup(cfg)}`;
