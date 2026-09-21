@@ -336,6 +336,7 @@ export function updateStatus(ctx: ExtensionContext, state: ReflexState): void {
 	const avg = state.avgLatency();
 	const parts = [`${g.allowed + g.skipped} auto`, `${g.asked} asked`, `${g.blocked} blocked`];
 	if (avg !== undefined) parts.push(`~${Math.round(avg)}ms`);
+	if (state.route) parts.push(`jev via ${state.route.provider}`);
 	const label = state.degradedReason ? theme.fg("warning", "⚡ reflex degraded") : theme.fg("accent", `⚡ reflex ${state.config.reflex.riskAppetite}`);
 	ctx.ui.setStatus("reflex", `${label} ${theme.fg("dim", parts.join(" · "))}`);
 }
