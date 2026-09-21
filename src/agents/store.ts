@@ -249,9 +249,11 @@ export function listRuns(agentId: string, limit = 50): AgentRun[] {
 	if (!existsSync(dir)) return [];
 	const runs: AgentRun[] = [];
 	for (const f of readdirSync(dir)) {
-		if (!f.endsWith(".json")) continue;
+		// Runs are <id>.json; <id>.state.json next to them is the resume checkpoint, not a run.
+		if (!f.endsWith(".json") || f.endsWith(".state.json")) continue;
 		try {
-			runs.push(JSON.parse(readFileSync(join(dir, f), "utf8")) as AgentRun);
+			const run = JSON.parse(readFileSync(join(dir, f), "utf8")) as AgentRun;
+			if (run && typeof run.id === "string" && typeof run.startedAt === "number") runs.push(run);
 		} catch {}
 	}
 	return runs.sort((a, b) => b.startedAt - a.startedAt).slice(0, limit);
