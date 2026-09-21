@@ -72,8 +72,10 @@ export interface ReflexPolicyConfig {
 	};
 	/** Jev model id. */
 	model: string;
-	/** Where Jev is called: TypeSafe's API, OpenRouter's System One endpoint, or whichever key exists ("auto"). */
-	provider: "auto" | "typesafe" | "openrouter";
+	/** Where Jev is called, chosen by the user: TypeSafe's API or OpenRouter's System One endpoint. Unset until chosen. */
+	provider?: "typesafe" | "openrouter";
+	/** The Jev model per provider (ids differ: `jev-preview` on TypeSafe, `typesafe/jev-1.13` on OpenRouter). */
+	models?: { typesafe?: string; openrouter?: string };
 	/** Hard timeout for a single Jev request. On timeout the gate falls back to "ask". */
 	timeoutMs: number;
 	/** Show every Jev decision as a line in the chat (off: only asks/blocks/nudges are visible). */
@@ -124,7 +126,6 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		protectedPaths: [".env", "**/.env*", "**/*.pem", "**/id_rsa*", "~/.ssh/**", "~/.aws/**"],
 		routing: {},
 		model: "jev-latest",
-		provider: "auto",
 		timeoutMs: 4000,
 		verbose: true,
 		selectSkills: true,

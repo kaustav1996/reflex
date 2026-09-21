@@ -4,7 +4,7 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createKeyResolver, getPiAgentDir, getReflexConfigPath, loadReflexConfig, SERVICE_ENV } from "./config.js";
 import { noul } from "./extensions/typesafe/client.js";
-import { createJevClient, missingJevHint, normalizeSetting } from "./extensions/typesafe/provider.js";
+import { createJevClient, JEV_LABEL, missingJevHint } from "./extensions/typesafe/provider.js";
 import { piStoredApiKey } from "./extensions/typesafe/state.js";
 import { detectRecorder, recorderInstallHint } from "./extensions/voice/recorder.js";
 
@@ -33,13 +33,13 @@ export async function runDoctor(): Promise<void> {
 
 	// TypeSafe
 	const made = createJevClient(config, keys, { timeoutMs: 8000 });
-	if (!made) console.log(bad(`Jev unreachable: ${missingJevHint(normalizeSetting(process.env.REFLEX_JEV_PROVIDER ?? config.reflex.provider))} → reflex layer disabled`));
+	if (!made) console.log(bad(`Jev unreachable: ${missingJevHint(config, keys)} → reflex layer disabled`));
 	else {
 		const client = made.client;
 		try {
 			const t0 = performance.now();
 			const res = await client.systemOne({ purpose: "doctor", state: { command: "git status" }, questions: { destructive: noul("Is running command destructive?") } });
-			console.log(ok(`Jev ${res.model} via ${made.route.provider} (${made.route.reason}): ${Math.round(performance.now() - t0)}ms · P(git status destructive)=${res.answers.destructive.noul.toFixed(3)} · key from ${keys.source(made.route.provider)}`));
+			console.log(ok(`Jev via ${JEV_LABEL[made.route.provider]}${made.route.chosen ? "" : " (provider not chosen yet; using this by default)"} · model ${made.route.model} → ${res.model}: ${Math.round(performance.now() - t0)}ms · P(git status destructive)=${res.answers.destructive.noul.toFixed(3)} · key from ${keys.source(made.route.provider)}`));
 		} catch (err) {
 			console.log(bad(`Jev via ${made.route.provider}: ${err instanceof Error ? err.message : String(err)}`));
 		}

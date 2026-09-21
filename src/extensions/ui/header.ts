@@ -42,7 +42,7 @@ export function createUiExtension(config: ReflexConfig, version: string): (pi: E
 						titleBar,
 						`${fg("border", "├")}${fg("border", "─".repeat(inner))}${fg("border", "┤")}`,
 						row(` ${fg("muted", BRAND_TAGLINE)}`),
-						row(` ${label("System One")} ${value(config.reflex.model.padEnd(16))} ${fg("dim", "reflex")} ${value(reflex)}`),
+						row(` ${label("System One")} ${value(`${config.reflex.models?.[config.reflex.provider ?? "typesafe"] ?? "jev-latest"}${config.reflex.provider === "openrouter" ? " via openrouter" : ""}`.padEnd(16))} ${fg("dim", "reflex")} ${value(reflex)}`),
 						row(` ${label("System Two")} ${value(model)}`),
 						row(` ${label("Voice")} ${value(voice.padEnd(16))} ${fg("dim", "pi")} ${value(piVersion())}`),
 						row(` ${label("Loading")} ${meter}`),

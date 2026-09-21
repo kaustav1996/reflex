@@ -37,7 +37,7 @@ import { buildPresetConfig, persistServer, removeConnector } from "../extensions
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
-import { jevRouteFor } from "../extensions/typesafe/provider.js";
+import { asProvider, chosenProvider, JEV_LABEL, jevModelFor, jevRouteFor, listJevModels } from "../extensions/typesafe/provider.js";
 import { ghLogin, githubAuth } from "../artifacts/github.js";
 import { type ProviderName, startCliLogin } from "../artifacts/providers.js";
 import { artifactsConfig, deployLogPath, listArtifacts, listDeploys, loadArtifact, loadDeploy } from "../artifacts/store.js";
@@ -572,7 +572,12 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 								bundled: existsSync(join(bundledDir, n, "SKILL.md")),
 							}))
 					: [];
-				return json(res, 200, { config: cfg, keys: keyStatus, env: SERVICE_ENV, packages, skills, mcp: loadMcpConfig(), presets: PRESET_META, jev: (() => { const r = jevRouteFor(cfg, createKeyResolver(piStoredApiKey)); return r ? { provider: r.provider, reason: r.reason } : null; })(), artifacts: artifactsCfgFor(), artifactDefaults: { RENDER_REGION: process.env.RENDER_REGION || "singapore", ARTIFACTS_REPO_PRIVATE: /^(1|true|yes)$/i.test(process.env.ARTIFACTS_REPO_PRIVATE ?? "") }, agentDir: getPiAgentDir(), home: getReflexHome() });
+				return json(res, 200, { config: cfg, keys: keyStatus, env: SERVICE_ENV, packages, skills, mcp: loadMcpConfig(), presets: PRESET_META, jev: (() => {
+					const kr = createKeyResolver(piStoredApiKey);
+					const has = { typesafe: !!kr.get("typesafe"), openrouter: !!kr.get("openrouter") };
+					const pick = chosenProvider(cfg, { typesafe: kr.get("typesafe"), openrouter: kr.get("openrouter") });
+					return { provider: pick.provider, chosen: pick.chosen, reachable: !!jevRouteFor(cfg, kr), hasKey: has, models: { typesafe: jevModelFor(cfg, "typesafe"), openrouter: jevModelFor(cfg, "openrouter") }, labels: JEV_LABEL };
+				})(), artifacts: artifactsCfgFor(), artifactDefaults: { RENDER_REGION: process.env.RENDER_REGION || "singapore", ARTIFACTS_REPO_PRIVATE: /^(1|true|yes)$/i.test(process.env.ARTIFACTS_REPO_PRIVATE ?? "") }, agentDir: getPiAgentDir(), home: getReflexHome() });
 			}
 			if (url.pathname === "/api/settings" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { config?: Partial<ReturnType<typeof loadCfg>>; keys?: Record<string, string> };
@@ -604,7 +609,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				if (rejected.length) return json(res, 400, { error: `key not saved — ${rejected.join("; ")}` });
 				if (body.config) {
 					const cfg = loadCfg();
-					const merged = { ...cfg, ...body.config, reflex: { ...cfg.reflex, ...(body.config.reflex ?? {}) }, voice: { ...cfg.voice, ...(body.config.voice ?? {}) }, browser: { ...cfg.browser, ...(body.config.browser ?? {}) }, ui: { ...cfg.ui, ...(body.config.ui ?? {}) }, llm: { ...cfg.llm, ...(body.config.llm ?? {}) } };
+					const merged = { ...cfg, ...body.config, reflex: { ...cfg.reflex, ...(body.config.reflex ?? {}), models: { ...(cfg.reflex.models ?? {}), ...((body.config.reflex as { models?: Record<string, string> } | undefined)?.models ?? {}) } }, voice: { ...cfg.voice, ...(body.config.voice ?? {}) }, browser: { ...cfg.browser, ...(body.config.browser ?? {}) }, ui: { ...cfg.ui, ...(body.config.ui ?? {}) }, llm: { ...cfg.llm, ...(body.config.llm ?? {}) } };
 					saveReflexConfig(merged);
 				}
 				return json(res, 200, { ok: true, shadowed });
@@ -774,6 +779,12 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					return void res.end();
 				}
 				return;
+			}
+			if (url.pathname === "/api/jev/models" && req.method === "GET") {
+				const provider = asProvider(url.searchParams.get("provider"));
+				if (!provider) return json(res, 400, { error: "provider must be typesafe or openrouter" });
+				const kr = createKeyResolver(piStoredApiKey);
+				return json(res, 200, { provider, hasKey: !!kr.get(provider), ...(await listJevModels(provider, kr.get(provider))) });
 			}
 			if (url.pathname === "/api/logs" && req.method === "GET") {
 				const kinds = (url.searchParams.get("kind") ?? "").split(",").filter(Boolean) as CallKind[];

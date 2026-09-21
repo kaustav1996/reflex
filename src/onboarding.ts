@@ -24,6 +24,7 @@ import {
 	storeKey,
 	type VoiceProviderId,
 } from "./config.js";
+import { JEV_LABEL, listJevModels } from "./extensions/typesafe/provider.js";
 import { piStoredApiKey } from "./extensions/typesafe/state.js";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -135,28 +136,51 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 	// ── 2. TypeSafe ────────────────────────────────────────────────────────
 	console.log(bold("2/4  TypeSafe System One (Jev) — the reflex layer"));
 	console.log(dim("  Jev answers narrow typed questions in ~100ms with calibrated confidence."));
-	console.log(dim("  A TypeSafe key calls it directly; without one, an OpenRouter key reaches the same model."));
+	console.log(dim("  You choose where Reflex reaches it: TypeSafe's API or OpenRouter. Each offers its own Jev models."));
 	console.log(dim("  Reflex uses it to gate risky actions, catch loops and unverified claims, classify voice, and route models."));
-	let typesafe = await askKey("TypeSafe", "typesafe", true);
-	if (typesafe && options.validateTypesafe) {
-		process.stdout.write(dim("  checking key… "));
-		const err = await options.validateTypesafe(typesafe.key);
-		if (err) {
-			console.log(warn(`✗ ${err}`));
-			const keep = await confirm({ message: "Key check failed. Keep it anyway?", default: false });
-			if (!keep) typesafe = undefined;
-		} else console.log(ok("✓"));
-	}
-	// Jev is also served by OpenRouter's System One endpoint, so an OpenRouter key alone is enough.
-	const openrouterKey = providerId === "openrouter" ? (llmKey?.key ?? process.env.OPENROUTER_API_KEY) : process.env.OPENROUTER_API_KEY;
-	let viaOpenRouter = false;
-	if (!typesafe && openrouterKey) {
-		viaOpenRouter = await confirm({ message: "No TypeSafe key. Reach Jev through your OpenRouter key instead (same model, billed by OpenRouter)?", default: true });
-		if (viaOpenRouter) console.log(ok("  ✓ reflex layer will call Jev via OpenRouter"));
-	}
-	if (typesafe || viaOpenRouter) {
+	const orKey = providerId === "openrouter" ? (llmKey?.key ?? process.env.OPENROUTER_API_KEY) : process.env.OPENROUTER_API_KEY;
+	const jevProvider = (await select({
+		message: "Reach Jev through:",
+		choices: [
+			{ name: "TypeSafe    — TypeSafe's own API (needs a TypeSafe key; also offers preview models)", value: "typesafe" },
+			{ name: `OpenRouter  — OpenRouter's System One endpoint${orKey ? " (uses the OpenRouter key you already have)" : " (needs an OpenRouter key)"}`, value: "openrouter" },
+			{ name: dim("Skip        — run without the reflex layer"), value: "none" },
+		],
+		default: config.reflex.provider ?? (process.env.TYPESAFE_API_KEY ? "typesafe" : orKey ? "openrouter" : "typesafe"),
+	})) as "typesafe" | "openrouter" | "none";
+	let jevKey: string | undefined;
+	if (jevProvider === "typesafe") {
+		let typesafe = await askKey("TypeSafe", "typesafe", true);
+		if (typesafe && options.validateTypesafe) {
+			process.stdout.write(dim("  checking key… "));
+			const err = await options.validateTypesafe(typesafe.key);
+			if (err) {
+				console.log(warn(`✗ ${err}`));
+				const keep = await confirm({ message: "Key check failed. Keep it anyway?", default: false });
+				if (!keep) typesafe = undefined;
+			} else console.log(ok("✓"));
+		}
 		if (typesafe && !typesafe.fromEnv) storeKey("typesafe", typesafe.key);
-		config.reflex.provider = "auto";
+		jevKey = typesafe?.key;
+	} else if (jevProvider === "openrouter") {
+		jevKey = orKey;
+		if (!jevKey) {
+			const k = await askKey("OpenRouter", "openrouter", true);
+			if (k && !k.fromEnv) await runtime.login("openrouter", "api_key", { prompt: async () => k.key, notify: () => {} });
+			jevKey = k?.key;
+		}
+	}
+	if (jevProvider !== "none" && jevKey) {
+		config.reflex.provider = jevProvider;
+		const { models, live } = await listJevModels(jevProvider, jevKey);
+		const current = config.reflex.models?.[jevProvider];
+		const modelPick = (await select({
+			message: `Jev model on ${JEV_LABEL[jevProvider]}${live ? "" : " (offline list)"}:`,
+			choices: models.map((m) => ({ name: `${m.id}${m.description ? dim(`  — ${m.description}`) : ""}`, value: m.id })),
+			default: current && models.some((m) => m.id === current) ? current : models[0]?.id,
+		})) as string;
+		config.reflex.models = { ...(config.reflex.models ?? {}), [jevProvider]: modelPick };
+		console.log(ok(`  ✓ Jev via ${JEV_LABEL[jevProvider]} · ${modelPick}`));
 		config.reflex.enabled = true;
 		config.reflex.riskAppetite = (await select({
 			message: "Risk appetite for autonomous actions:",
@@ -177,7 +201,7 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 		}
 	} else {
 		config.reflex.enabled = false;
-		console.log(warn("  Reflex layer disabled (no TypeSafe or OpenRouter key). Run `reflex setup` later to enable."));
+		console.log(warn("  Reflex layer disabled (no Jev provider with a key). Run `reflex setup` later to enable."));
 	}
 	console.log();
 

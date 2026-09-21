@@ -892,7 +892,8 @@ async function loadSettings() {
     <div class="card" id="s-keys"><h3>Keys</h3><div class="form">${keyRow("typesafe", "TypeSafe (Jev, direct)")}${keyRow("openrouter", "OpenRouter (LLM, and Jev)")}<label></label><div class="muted">One OpenRouter key runs every LLM and also reaches Jev (Reflex layer → Jev provider). Saved to Pi's auth store so sessions and the reflex layer both use it; checked with OpenRouter before saving.</div>${keyRow("sarvam", "Sarvam")}${keyRow("openai", "OpenAI (voice)")}${keyRow("groq", "Groq (voice)")}${keyRow("deepgram", "Deepgram")}</div><details style="margin-top:8px"><summary style="cursor:pointer;font-weight:600">Other LLM providers</summary><div class="form" style="margin-top:6px">${keyRow("anthropic", "Anthropic")}${keyRow("google", "Google Gemini")}${keyRow("xai", "xAI")}${keyRow("deepseek", "DeepSeek")}${keyRow("mistral", "Mistral")}</div></details>
       <div class="hint">LLM keys are saved to Pi's auth store (~/.reflex/agent/auth.json); TypeSafe and voice keys to ~/.reflex/keys.json. Both are 0600 and never shown again. A key in your environment or a .env file always wins over a saved one.</div></div>
     <div class="card" id="s-reflex"><h3>Reflex layer (System One)</h3><div class="form">
-      <label>Jev provider</label><div>${opt("reflex.provider", c.reflex.provider || "auto", ["auto", "typesafe", "openrouter"])}<div class="muted">${d.jev ? `now: ${esc(d.jev.provider)} (${esc(d.jev.reason)})` : "Jev is unreachable: add a TypeSafe or an OpenRouter key"} · auto = TypeSafe key if present, otherwise your OpenRouter key</div></div>
+      <label>Jev provider</label><div><select data-cfg="reflex.provider" id="jevProvider">${["typesafe", "openrouter"].map(p => `<option value="${p}" ${d.jev.provider === p ? "selected" : ""}>${esc(d.jev.labels[p])}${d.jev.hasKey[p] ? "" : " · no key yet"}</option>`).join("")}</select><div class="muted" id="jevProviderHint"></div></div>
+      <label>Jev model</label><div><select id="jevModel"></select><div class="muted" id="jevModelHint">loading models…</div></div>
       <label>enabled</label>${opt("reflex.enabled", c.reflex.enabled, [true, false])}<label>appetite</label>${opt("reflex.riskAppetite", c.reflex.riskAppetite, ["cautious", "balanced", "bold"])}
       <label>gate tool calls</label>${opt("reflex.gateToolCalls", c.reflex.gateToolCalls, [true, false])}<label>monitor progress</label>${opt("reflex.monitorProgress", c.reflex.monitorProgress, [true, false])}
       <label>route models</label>${opt("reflex.routeModels", c.reflex.routeModels, [true, false])}<label>classify voice</label>${opt("reflex.classifyVoice", c.reflex.classifyVoice, [true, false])}<label>verbose decisions</label>${opt("reflex.verbose", c.reflex.verbose, [true, false])}
@@ -918,6 +919,7 @@ async function loadSettings() {
       <div class="rowbtns"><button class="b small" id="mTest">test</button><button class="b small primary" id="mAdd">add & save</button></div><pre class="out" id="mOut" style="display:none"></pre></details>
       <div class="hint" style="margin-top:10px">Every tool of every enabled server becomes a Reflex tool named <code>server__tool</code>, gated by the reflex layer like any other. Stored in ~/.reflex/mcp.json.</div></div>`;
   showSettingsPage(state.settingsPage);
+  wireJevChoice(d.jev);
   drawConnectors();
   state.artCfg = d.artifacts; state.artDefaults = d.artifactDefaults || {};
   $("#artSettingsBody").innerHTML = artifactSetup(d.artifacts, true); wireArtifactSetup($("#artSettingsBody"));
@@ -1192,6 +1194,23 @@ function openArtifactDeploy(id, did) {
     else if (ev.type === "deploy_end") { log.textContent += `■ ${ev.deploy.status}${ev.deploy.frontendUrl ? " · " + ev.deploy.frontendUrl : ""}${ev.deploy.error ? "\n" + ev.deploy.error : ""}\n`; state.artEs.close(); if (replayed) setTimeout(() => openArtifact(id, did), 500); }
     else if (ev.type === "deploy_closed") state.artEs.close();
     log.scrollTop = log.scrollHeight; };
+}
+
+// ── Jev: the user picks the provider, then one of that provider's models ───────
+async function wireJevChoice(jev) {
+  const prov = $("#jevProvider"), model = $("#jevModel"); if (!prov || !model) return;
+  const fill = async () => {
+    const p = prov.value;
+    $("#jevProviderHint").textContent = `${jev.chosen || p !== jev.provider ? "" : "not chosen yet — this default is in use until you save · "}${jev.hasKey[p] ? "key found" : `no ${p === "typesafe" ? "TypeSafe" : "OpenRouter"} key: add one under Keys`} · ${p === "typesafe" ? "calls api.typesafe.ai directly" : "calls OpenRouter's System One endpoint, billed by OpenRouter"}`;
+    model.dataset.cfg = `reflex.models.${p}`; model.innerHTML = ""; $("#jevModelHint").textContent = "loading models…";
+    try {
+      const r = await api(`/api/jev/models?provider=${p}`); if (prov.value !== p) return;
+      const current = jev.models[p]; const ids = r.models.map(m => m.id); if (current && !ids.includes(current)) r.models.unshift({ id: current, description: "saved" });
+      model.innerHTML = r.models.map(m => `<option value="${esc(m.id)}" ${m.id === current ? "selected" : ""}>${esc(m.id)}${m.description ? " — " + esc(m.description) : ""}${m.inputPerMillion ? ` · $${m.inputPerMillion.toFixed(3)}/M in` : ""}</option>`).join("");
+      $("#jevModelHint").textContent = `${r.live ? "live list" : "offline list"} from ${jev.labels[p]} · models differ per provider and are remembered separately`;
+    } catch (e) { $("#jevModelHint").textContent = "could not load models: " + e.message; }
+  };
+  prov.onchange = fill; await fill();
 }
 
 // ── call logs (Settings → Logs) ───────────────────────────────────────────

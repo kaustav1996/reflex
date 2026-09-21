@@ -1,7 +1,7 @@
 /**
  * Reflex layer extension entry: wires the gate, monitor, router and the /reflex command.
  */
-import { missingJevHint, normalizeSetting } from "./provider.js";
+import { asProvider, JEV_LABEL, listJevModels, missingJevHint } from "./provider.js";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { ReflexConfig, RiskAppetite } from "../../config.js";
@@ -68,7 +68,7 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 					});
 			}
 			if (ctx.hasUI && state.config.reflex.enabled && !state.client) {
-				ctx.ui.notify(`⚡ Reflex layer is on but Jev is unreachable: ${missingJevHint(normalizeSetting(state.config.reflex.provider))}. Set TYPESAFE_API_KEY or OPENROUTER_API_KEY, or run /setup.`, "warning");
+				ctx.ui.notify(`⚡ Reflex layer is on but Jev is unreachable: ${missingJevHint(state.config, state.keys)}`, "warning");
 			}
 		});
 
@@ -96,11 +96,11 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 		case "": {
 			const lines = [
 				`${theme.bold("⚡ Reflex")} ${state.enabled ? theme.fg("success", "on") : theme.fg("error", "off")}${state.client ? "" : theme.fg("warning", " (no TypeSafe or OpenRouter key)")}`,
-				`jev: ${state.route ? `${theme.fg("accent", state.route.provider)} ${theme.fg("dim", `(${state.route.reason}; setting: ${state.config.reflex.provider ?? "auto"})`)}` : theme.fg("warning", "unreachable")}`,
+				`jev: ${state.route ? `${theme.fg("accent", JEV_LABEL[state.route.provider])} · model ${theme.fg("accent", state.route.model)}${state.route.chosen ? "" : theme.fg("warning", "  (provider not chosen yet: /reflex provider typesafe|openrouter)")}` : theme.fg("warning", `unreachable: ${missingJevHint(state.config, state.keys)}`)}`,
 				`appetite: ${theme.fg("accent", p.riskAppetite)}   gate: ${onOff(p.gateToolCalls)}   monitor: ${onOff(p.monitorProgress)}   route: ${onOff(p.routeModels)}   verbose: ${onOff(p.verbose)}`,
-				`model: ${p.model}   timeout: ${p.timeoutMs}ms   protected: ${p.protectedPaths.length} patterns`,
+				`timeout: ${p.timeoutMs}ms   protected: ${p.protectedPaths.length} patterns`,
 				`routing: fast=${p.routing.fast ?? "-"}  default=${p.routing.default ?? "-"}  strong=${p.routing.strong ?? "-"}`,
-				theme.fg("dim", "usage: /reflex appetite <cautious|balanced|bold> · gate on|off · monitor on|off · route on|off · routing fast=<provider/model> … · stats · last"),
+				theme.fg("dim", "usage: /reflex appetite <cautious|balanced|bold> · gate on|off · monitor on|off · route on|off · provider typesafe|openrouter · model [id] · routing fast=<provider/model> … · stats · last"),
 			];
 			ctx.ui.setWidget("reflex-info", lines);
 			setTimeout(() => ctx.ui.setWidget("reflex-info", undefined), 12000);
@@ -143,12 +143,32 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 			break;
 		}
 		case "provider": {
-			const v = (rest[0] ?? "").toLowerCase();
-			if (!["auto", "typesafe", "openrouter"].includes(v)) return say(`jev provider: ${state.route?.provider ?? "unreachable"} (setting: ${p.provider ?? "auto"}). Usage: /reflex provider auto|typesafe|openrouter`);
-			p.provider = v as typeof p.provider;
+			let v = asProvider((rest[0] ?? "").toLowerCase());
+			if (!v && ctx.hasUI && !rest[0]) {
+				const picked = await ctx.ui.select(`Reach Jev through which provider? (now: ${state.route ? JEV_LABEL[state.route.provider] : "none"})`, ["typesafe  — TypeSafe's API, needs TYPESAFE_API_KEY", "openrouter — OpenRouter's System One endpoint, uses OPENROUTER_API_KEY"]);
+				v = asProvider(picked?.split(" ")[0]);
+			}
+			if (!v) return say("usage: /reflex provider typesafe|openrouter");
+			p.provider = v;
 			state.save();
 			state.refreshClient();
-			return say(state.route ? `Jev now goes through ${state.route.provider} (${state.route.reason}).` : `Jev is unreachable: ${missingJevHint(normalizeSetting(v))}.`, state.route ? "info" : "warning");
+			return say(state.route ? `Jev now goes through ${JEV_LABEL[state.route.provider]} with model ${state.route.model}. Change the model with /reflex model.` : `Jev is unreachable: ${missingJevHint(state.config, state.keys)}`, state.route ? "info" : "warning");
+		}
+		case "model": {
+			const provider = state.route?.provider ?? asProvider(p.provider);
+			if (!provider) return say("choose a provider first: /reflex provider typesafe|openrouter", "warning");
+			let id: string | undefined = rest[0];
+			if (!id) {
+				const { models, live } = await listJevModels(provider, state.keys.get(provider));
+				if (!ctx.hasUI) return say(`${JEV_LABEL[provider]} models${live ? "" : " (offline list)"}: ${models.map((m) => m.id).join(", ")}`);
+				const picked = await ctx.ui.select(`Jev model on ${JEV_LABEL[provider]}${live ? "" : " (offline list)"} · now: ${state.route?.model ?? "-"}`, models.map((m) => `${m.id}${m.description ? `  — ${m.description}` : ""}`));
+				id = picked?.split(" ")[0];
+			}
+			if (!id) return;
+			p.models = { ...(p.models ?? {}), [provider]: id };
+			state.save();
+			state.refreshClient();
+			return say(`Jev model on ${JEV_LABEL[provider]} is now ${id}.`);
 		}
 		case "stats": {
 			const s = state.client?.stats;

@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { createKeyResolver, loadDotEnv, loadReflexConfig } from "./config.js";
 import { choice, noul, type Question, score } from "./extensions/typesafe/client.js";
-import { createJevClient, missingJevHint, normalizeSetting } from "./extensions/typesafe/provider.js";
+import { createJevClient, JEV_LABEL, missingJevHint } from "./extensions/typesafe/provider.js";
 import { piStoredApiKey } from "./extensions/typesafe/state.js";
 
 function readArg(v: string | undefined): string {
@@ -24,8 +24,9 @@ export async function runJevCli(args: string[]): Promise<void> {
 		return i >= 0 ? args[i + 1] : undefined;
 	};
 	const cfg = loadReflexConfig();
-	const made = createJevClient(cfg, createKeyResolver(piStoredApiKey), { timeoutMs: 15000 });
-	if (!made) throw new Error(`Jev is unreachable: ${missingJevHint(normalizeSetting(process.env.REFLEX_JEV_PROVIDER ?? cfg.reflex.provider))}`);
+	const resolver = createKeyResolver(piStoredApiKey);
+	const made = createJevClient(cfg, resolver, { timeoutMs: 15000 });
+	if (!made) throw new Error(`Jev is unreachable: ${missingJevHint(cfg, resolver)}`);
 	const stateRaw = readArg(get("--state") ?? get("-s"));
 	if (!stateRaw) throw new Error("usage: reflex jev --state <text|@file|@-> (--questions <json|@file> | --noul <q> | --choice \"id: a|b|c\" <q> | --score <q> --levels \"l0|l1|l2\")");
 	let state: unknown = stateRaw;
