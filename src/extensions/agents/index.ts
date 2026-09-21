@@ -16,9 +16,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseCron } from "../../agents/cron.js";
-import { deleteAgent, listAgents, loadAgent, saveAgent } from "../../agents/store.js";
+import { agentFileError, agentsDir, deleteAgent, listAgents, listBrokenAgents, loadAgent, saveAgent } from "../../agents/store.js";
 import { liveRunsForAgent, runAgent } from "../../agents/runner.js";
 
 function resolveCwd(cwd: string | undefined): string {
@@ -26,8 +27,35 @@ function resolveCwd(cwd: string | undefined): string {
 	return resolve(cwd.replace(/^~(?=$|\/)/, homedir()));
 }
 
+/** The agent id when `path` is some agent's agent.json. */
+function agentJsonId(path: unknown): string | undefined {
+	if (typeof path !== "string") return undefined;
+	const m = resolveCwd(path).match(/\/agents\/([^/]+)\/agent\.json$/);
+	return m && resolveCwd(path).startsWith(agentsDir()) ? m[1] : undefined;
+}
+
 export function createAgentsExtension(): (pi: ExtensionAPI) => void {
 	return (pi) => {
+		// An agent.json edited by hand into invalid JSON silently drops the agent. Say so in the tool
+		// result, while the model can still fix it.
+		pi.on("tool_result", async (ev) => {
+			const input = (ev.input ?? {}) as Record<string, unknown>;
+			let broken: ReturnType<typeof listBrokenAgents> = [];
+			if (ev.toolName === "edit" || ev.toolName === "write") {
+				const id = agentJsonId(input.path ?? input.file_path);
+				if (!id) return undefined;
+				try {
+					const b = agentFileError(id, readFileSync(resolveCwd(String(input.path ?? input.file_path)), "utf8"));
+					if (b) broken = [b];
+				} catch {}
+			} else if (ev.toolName === "bash" && typeof input.command === "string" && input.command.includes("agent.json")) {
+				broken = listBrokenAgents();
+			}
+			if (!broken.length) return undefined;
+			const text = broken.map((b) => `⚠ ${b.file} is no longer valid JSON (${b.line ? `line ${b.line}, column ${b.column}: ` : ""}${b.error}). Agent "${b.id}" won't appear in the Agents tab or run until this is fixed.${b.snippet ? ` Near: ${b.snippet}` : ""} Fix it, preferably by calling create_agent with id "${b.id}" instead of editing the file.`).join("\n");
+			return { content: [...ev.content, { type: "text" as const, text }] };
+		});
+
 		pi.registerTool({
 			name: "list_agents",
 			label: "List agents",
@@ -56,6 +84,7 @@ export function createAgentsExtension(): (pi: ExtensionAPI) => void {
 			promptSnippet: "Create or update a scheduled/webhook Reflex agent",
 			promptGuidelines: [
 				"Prefer create_agent over asking the user to fill the Agents form. Fill in a clear prompt that describes exactly what the agent should do each run.",
+				"To change an existing agent, call create_agent again with its id. Don't edit agent.json by hand: shell commands with quotes and HTML entities are easy to break, and an agent.json that isn't valid JSON disappears from the Agents tab and never runs.",
 				"If the user asks for 'every weekday at 9' use cron with schedule '0 9 * * 1-5'. For a webhook trigger, set triggers to [{type:'webhook'}]; a secret URL is generated on save.",
 				"Set cwd to the project the agent should work in (default: the current session's cwd). Don't set tools unless the user asked for a restricted/read-only agent.",
 			],

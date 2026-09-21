@@ -157,6 +157,47 @@ export function listAgents(): AgentDefinition[] {
 	return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export interface BrokenAgent {
+	id: string;
+	file: string;
+	error: string;
+	line?: number;
+	column?: number;
+	/** The text around the error, to show where it broke. */
+	snippet?: string;
+}
+
+/** Why an agent.json can't be read, with line and column when JSON.parse gives a position. */
+export function agentFileError(id: string, text: string): BrokenAgent | undefined {
+	try {
+		JSON.parse(text);
+		return undefined;
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		const file = join(agentDir(id), "agent.json");
+		const pos = Number(message.match(/position (\d+)/)?.[1] ?? NaN);
+		if (!Number.isFinite(pos)) return { id, file, error: message };
+		const before = text.slice(0, pos);
+		const line = before.split("\n").length;
+		const column = pos - before.lastIndexOf("\n");
+		return { id, file, error: message, line, column, snippet: `${text.slice(Math.max(0, pos - 120), pos)}⟪here⟫${text.slice(pos, pos + 60)}` };
+	}
+}
+
+/** Agents whose agent.json exists but doesn't parse. They never run, but the UI must show them. */
+export function listBrokenAgents(): BrokenAgent[] {
+	const dir = agentsDir();
+	if (!existsSync(dir)) return [];
+	const out: BrokenAgent[] = [];
+	for (const id of readdirSync(dir)) {
+		const file = join(agentDir(id), "agent.json");
+		if (!existsSync(file)) continue;
+		const broken = agentFileError(id, readFileSync(file, "utf8"));
+		if (broken) out.push(broken);
+	}
+	return out;
+}
+
 export function loadAgent(id: string): AgentDefinition | undefined {
 	const file = join(agentDir(id), "agent.json");
 	if (!existsSync(file)) return undefined;

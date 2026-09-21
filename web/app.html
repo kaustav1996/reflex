@@ -775,7 +775,7 @@ $("#settingsBtn").onclick = () => setTab("settings");
 
 // ── agents ───────────────────────────────────────────────────────────────
 async function refreshAgents() {
-  const { agents } = await api("/api/agents"); state.agents = agents;
+  const { agents, broken = [] } = await api("/api/agents"); state.agents = agents; state.brokenAgents = broken;
   const box = $("#agentsList"); box.innerHTML = "";
   for (const a of agents) {
     const div = document.createElement("div");
@@ -787,10 +787,40 @@ async function refreshAgents() {
     div.onclick = () => openAgent(a.id);
     box.appendChild(div);
   }
-  if (!agents.length) box.innerHTML = `<div class="empty" style="padding:20px">No agents yet.<br>Press <b>+ agent</b>.</div>`;
+  for (const b of broken) {
+    const div = document.createElement("div");
+    div.className = "agent-item broken" + (state.brokenView === b.id ? " active" : "");
+    div.innerHTML = `<span class="dot off"></span><span>${esc(b.id)}</span><span class="meta">⚠ can't load</span>`;
+    div.title = `${b.file}\n${b.error}`;
+    div.onclick = () => openBrokenAgent(b.id);
+    box.appendChild(div);
+  }
+  if (!agents.length && !broken.length) box.innerHTML = `<div class="empty" style="padding:20px">No agents yet.<br>Press <b>+ agent</b>.</div>`;
+}
+/** An agent whose agent.json doesn't parse: say where it broke and how to fix it, instead of a blank page. */
+function openBrokenAgent(id) {
+  const b = (state.brokenAgents || []).find(x => x.id === id); if (!b) return;
+  state.agent = null; state.brokenView = id; $("#title").textContent = `${id} · can't load`;
+  const fix = `The agent "${id}" can't load: ${b.file} is not valid JSON${b.line ? ` (line ${b.line}, column ${b.column})` : ""}: ${b.error}. Fix that file, preferably by calling create_agent with id "${id}" and the corrected definition, then check that it parses.`;
+  $("#agentPane").innerHTML = `<div class="card"><h3>⚠ ${esc(id)} can't load</h3>
+    <div class="hint">Its definition file isn't valid JSON, so the agent doesn't run and can't be opened here. This usually happens when a session edits <code>agent.json</code> by hand and a quote or an HTML entity breaks the escaping.</div>
+    <div class="conn-meta"><div><div class="k">File</div><div class="v"><code>${esc(b.file)}</code></div></div><div><div class="k">Error</div><div class="v">${esc(b.error)}</div></div>${b.line ? `<div><div class="k">Where</div><div class="v">line ${b.line}, column ${b.column}</div></div>` : ""}</div>
+    ${b.snippet ? `<h3 style="margin:12px 0 4px">Near the error</h3><pre class="out">${esc(b.snippet)}</pre>` : ""}
+    <div class="rowbtns"><button class="b primary" id="brokenCopy">copy a fix request for a session</button><button class="b" id="brokenReload">check again</button></div>
+    <div class="hint">Paste the request into the session that built the agent (or any Reflex session). Runs and settings come back once the file parses.</div></div>`;
+  $("#brokenCopy").onclick = () => copyText(fix);
+  $("#brokenReload").onclick = async () => { await refreshAgents(); if (state.agents.some(a => a.id === id)) { state.brokenView = null; openAgent(id); } else if ((state.brokenAgents || []).some(x => x.id === id)) { openBrokenAgent(id); notice("warning", "still not valid JSON"); } };
+  refreshAgents();
 }
 async function openAgent(id, runId) {
-  const data = await api(`/api/agents/${id}`); state.agent = data.agent; state.agentRuns = data.runs; state.agentLive = data.live; state.agentDiagram = data.diagram; state.agentMermaid = data.mermaid;
+  state.brokenView = null;
+  let data;
+  try { data = await api(`/api/agents/${id}`); }
+  catch (e) {
+    await refreshAgents();
+    if ((state.brokenAgents || []).some(b => b.id === id)) return openBrokenAgent(id);
+    $("#agentPane").innerHTML = `<div class="card"><h3>Couldn't open ${esc(id)}</h3><div class="hint">${esc(e.message)}</div></div>`; return;
+  } state.agent = data.agent; state.agentRuns = data.runs; state.agentLive = data.live; state.agentDiagram = data.diagram; state.agentMermaid = data.mermaid;
   $("#title").textContent = state.agent.name;
   refreshAgents(); renderAgent(runId);
 }
