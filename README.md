@@ -327,6 +327,16 @@ npm run typecheck
 npm test                      # policy thresholds, gate helpers, manifests, masking, sidecar, presets …
 ```
 
+The tests need no API keys or network, and they run against a temporary `REFLEX_HOME`, so they
+never touch your own `~/.reflex`.
+
+## Contributing
+
+Pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, where things live and
+the rules for the reflex layer. Issues labelled
+[`good first issue`](https://github.com/kaustav1996/reflex/labels/good%20first%20issue) are the
+easiest place to start, and [docs/ROADMAP.md](docs/ROADMAP.md) lists what's planned.
+
 ## Limits
 
 - Jev is text-only, does no arithmetic or date math, and adversarial content can sway it. Code

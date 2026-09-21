@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { getReflexHome } from "../src/config.ts";
 import { dotenvNames, dotenvSecretValues, isValidEnvName, maskSecret, protectFromGit, redactSecrets, resolveDestination, upsertDotenv, writeSecret } from "../src/extensions/secrets/store.ts";
 
 test("env names must be UPPER_SNAKE_CASE", () => {
@@ -55,7 +56,7 @@ test("resolveDestination stays inside the project and only accepts dotenv files"
 	assert.equal(resolveDestination(undefined, cwd).file, "/tmp/proj/.env");
 	assert.equal(resolveDestination(".env.local", cwd).label, ".env.local");
 	assert.equal(resolveDestination("apps/api/.env", cwd).file, "/tmp/proj/apps/api/.env");
-	assert.ok(resolveDestination("global", cwd).file.endsWith("/.reflex/.env"));
+	assert.equal(resolveDestination("global", cwd).file, join(getReflexHome(), ".env"));
 	assert.throws(() => resolveDestination("../.env", cwd), /inside the project/);
 	assert.throws(() => resolveDestination("config.json", cwd), /dotenv-style/);
 });

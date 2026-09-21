@@ -23,7 +23,7 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx tests/*.test.ts",
+    "test": "REFLEX_HOME=$(mktemp -d) node --test --import tsx tests/*.test.ts",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
