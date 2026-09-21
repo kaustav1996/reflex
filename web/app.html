@@ -212,6 +212,9 @@
   .sk-h { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
   .sk-on { flex-shrink: 0; padding: 2px; cursor: pointer; }
   .sk-on input { width: 16px; height: 16px; cursor: pointer; }
+  .md-details { border-left: 2px solid var(--line); margin: 4px 0; padding: 2px 8px; color: var(--gray); font-size: 12px; }
+  .md-details > summary { cursor: pointer; font-weight: 700; }
+  .md-details[open] { color: var(--ink); }
   .rec-card { border: 1px solid var(--line); padding: 10px; margin: 6px 0 10px; box-shadow: 2px 2px 0 var(--pink); }
   .rec-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
   .conn-src { font-size: 9px; font-weight: 700; letter-spacing: .04em; border: 1px solid var(--gray); color: var(--gray); padding: 0 3px; vertical-align: middle; }
@@ -314,7 +317,17 @@ const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", 
 function md(text) {
   // small markdown: fences, inline code, bold, paragraphs
   let out = "", parts = text.split(/```/);
-  parts.forEach((p, i) => { if (i % 2) { const nl = p.indexOf("\n"); out += `<pre>${esc(nl >= 0 ? p.slice(nl + 1) : p)}</pre>`; } else out += p.split(/\n{2,}/).map(par => `<p>${esc(par).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")}</p>`).join(""); });
+  const inline = t => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const paras = t => t.split(/\n{2,}/).filter(x => x.trim()).map(par => `<p>${inline(par)}</p>`).join("");
+  // Some models write chat-app HTML: <details><summary>…</summary>…</details>. Rebuild it as a real
+  // collapsible block from its text (every other tag stays escaped; model output is never injected as HTML).
+  const prose = t => t.split(/(<details\b[^>]*>[\s\S]*?<\/details>)/i).map(seg => {
+    const m = seg.match(/^<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary>([\s\S]*)<\/details>$/i);
+    if (!m) return paras(seg);
+    const strip = x => x.replace(/<\/?(div|p|span|br)\b[^>]*>/gi, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    return `<details class="md-details"><summary>${inline(strip(m[1]))}</summary>${paras(strip(m[2]))}</details>`;
+  }).join("");
+  parts.forEach((p, i) => { if (i % 2) { const nl = p.indexOf("\n"); out += `<pre>${esc(nl >= 0 ? p.slice(nl + 1) : p)}</pre>`; } else out += prose(p); });
   return out;
 }
 
