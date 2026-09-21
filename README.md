@@ -106,7 +106,9 @@ Onboarding asks for three things, or picks them up from your environment or a `.
 The same choices are in the web UI under Settings → LLM access: sign in or out of a
 subscription, and add an endpoint by base URL (Reflex asks the server for its models). The
 sign-in is Pi's built-in flow, and whether a subscription may be used from third-party tools is
-up to that provider's terms. Jev is separate and always comes from TypeSafe or OpenRouter.
+up to that provider's terms. Anthropic, for one, charges third-party apps to your extra-usage
+balance instead of your plan limits, and answers HTTP 400 when that balance is empty. A failed
+model call shows the provider's message in the session. Jev is separate and always comes from TypeSafe or OpenRouter.
 
 Run `reflex setup` to change any of this and `reflex doctor` to check the installation.
 

@@ -99,6 +99,7 @@
   .reflex.ts { border-left: 2px solid var(--pink); padding-left: 8px; color: var(--ink-soft); }
   .tsl { background: var(--pink); color: #1e1e1e; padding: 0 5px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
   .notice { font-size: 12px; padding: 4px 8px; border: 1px dashed var(--line); }
+  .msg.llm-error { border-left: 3px solid #c0392b; background: var(--tool-bg); color: var(--ink); padding: 8px 10px; overflow-wrap: anywhere; } .msg.llm-error b { color: #c0392b; margin-right: 6px; }
   .notice.warning { border-color: var(--magenta); } .notice.error { border-color: #c0392b; color: #c0392b; }
   #status { display: flex; gap: 14px; padding: 4px 10px; border-top: 2px solid var(--line); font-size: 11px; color: var(--gray); flex-wrap: wrap; }
   #status .k { color: var(--pink); }
@@ -421,8 +422,8 @@ function handle(id, ev) {
   if (ev.type === "transcript_entry") { handleEntry(v, ev.entry); if (id === state.current) render(); return; }
   switch (ev.type) {
     case "replay_done": render(); return;
-    case "agent_start": v.busy = true; break;
-    case "agent_end": case "agent_settled": v.busy = false; v.streaming = null; break;
+    case "agent_start": v.busy = true; if (id === state.current && !v.readonly) rpc({ type: "get_state" }); break;
+    case "agent_end": case "agent_settled": v.busy = false; v.streaming = null; if (id === state.current && !v.readonly) rpc({ type: "get_state" }); break; /* routing may have changed the model */
     case "message_start":
       if (ev.message?.role === "user") v.items.push({ kind: "user", text: contentText(ev.message.content) });
       if (ev.message?.role === "assistant") v.streaming = { kind: "assistant", text: "", thinking: "" }, v.items.push(v.streaming);
@@ -435,7 +436,12 @@ function handle(id, ev) {
       break;
     }
     case "message_end":
-      if (ev.message?.role === "assistant" && v.streaming) { v.streaming.text = contentText(ev.message.content); v.streaming = null; }
+      if (ev.message?.role === "assistant") {
+        const failed = ev.message.stopReason === "error" || !!ev.message.errorMessage;
+        if (v.streaming) { v.streaming.text = contentText(ev.message.content); if (failed && !v.streaming.text.trim() && !v.streaming.thinking) v.items.splice(v.items.indexOf(v.streaming), 1); v.streaming = null; }
+        // A failed model call has no text: show what the provider said instead of an empty bubble.
+        if (failed) v.items.push({ kind: "error", text: llmErrorText(ev.message) });
+      }
       break;
     case "tool_execution_start": { const t = { kind: "tool", id: ev.toolCallId, name: ev.toolName, args: ev.args, status: "run", out: "" }; v.byTool[ev.toolCallId] = t; v.items.push(t); break; }
     case "tool_execution_update": { const t = v.byTool[ev.toolCallId]; if (t) t.out = resultText(ev.partialResult); break; }
@@ -500,6 +506,7 @@ function renderItems(items, v) {
     if (it.kind === "tool") { group.push(it); continue; }
     flush();
     if (it.kind === "user") out.push(`<div class="msg user">${esc(it.text)}</div>`);
+    else if (it.kind === "error") out.push(`<div class="msg llm-error"><b>✗ no response</b> ${esc(it.text)}</div>`);
     else if (it.kind === "assistant") out.push((it.thinking ? `<div class="msg thinking">${esc(it.thinking.slice(-600))}</div>` : "") + `<div class="msg assistant md">${md(it.text)}${v.streaming === it ? "▌" : ""}</div>`);
     else if (it.kind === "reflex") out.push(`<div class="reflex${/^(gate|select|route|monitor|completion|voice|browse|allow|ask|block|session)/.test(it.text) ? " ts" : ""}"><b>⚡</b> ${/^(gate|select|route|monitor|completion|voice|browse)/.test(it.text) ? `<span class="tsl">TypeSafe</span> ` : ""}${esc(it.text)}</div>`);
     else if (it.kind === "typesafe") out.push(`<div class="reflex ts"><b>⚡</b> <span class="tsl">TypeSafe</span> ${esc(it.text)}</div>`);
@@ -531,6 +538,13 @@ function paint() {
   $("#status").innerHTML = [model && `<span><span class="k">model</span> ${esc(model)}</span>`, sess?.branch ? `<span class="branch">⎇ ${esc(sess.branch)}</span>` : "", ...Object.values(v.status).map(t => `<span>${esc(t)}</span>`), v.busy ? `<span class="k">working…</span>` : "", (q.steering.length + q.followUp.length) ? `<span class="k">${q.steering.length + q.followUp.length} queued</span>` : ""].filter(Boolean).join("");
   $("#queue").innerHTML = [...q.steering.map(t => `<span class="chip" title="delivered after the current tool calls">⏩ ${esc(String(t).slice(0, 60))}</span>`), ...q.followUp.map(t => `<span class="chip" title="delivered when the agent is done">⏭ ${esc(String(t).slice(0, 60))}</span>`)].join("");
   $("#abortBtn").style.display = v.busy && !v.readonly ? "" : "none";
+}
+/** Turn a failed model call into something readable: the provider's own message first, then where it came from. */
+function llmErrorText(m) {
+  const raw = String(m.errorMessage || "the model call failed"); let msg = raw;
+  const j = raw.indexOf("{"); if (j >= 0) { try { const o = JSON.parse(raw.slice(j)); msg = o?.error?.message || o?.message || raw; } catch {} }
+  const status = (raw.match(/^\s*(\d{3})\b/) || [])[1];
+  return `${m.provider || "provider"}/${m.model || "model"} did not answer${status ? ` (HTTP ${status})` : ""}: ${msg}`;
 }
 function notice(type, text) { const id = state.current; if (!id) return; view(id).items.push({ kind: "notice", text, type }); const chat = $("#chat"); const d = document.createElement("div"); d.className = `notice ${type}`; d.textContent = text; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; setTimeout(() => d.remove(), 12000); }
 
@@ -1215,7 +1229,7 @@ async function drawLlm() {
   body.innerHTML = `
     <div style="margin:10px 0 4px;font-weight:600">Sign in with a subscription</div>
     ${d.subscriptions.map(p => `<div class="mcp-row" style="grid-template-columns:170px 1fr auto"><b>${esc(p.label)}</b><span class="${p.auth === "oauth" ? "" : "muted"}">${p.auth === "oauth" ? "✓ signed in" : p.auth === "api_key" ? "an API key is stored for this provider" : esc(p.hint)}</span><span>${p.auth === "oauth" ? `<button class="b small" data-llmout="${esc(p.id)}">sign out</button>` : `<button class="b small primary" data-llmin="${esc(p.id)}">sign in</button>`}</span></div>`).join("")}
-    <div class="hint">Uses the provider's own browser sign-in; the token is stored in Pi's auth store and never shown. After signing in, pick one of its models with the <b>model</b> button in a session. Whether a subscription may be used from third-party tools is up to the provider's terms.</div>
+    <div class="hint">Uses the provider's own browser sign-in; the token is stored in Pi's auth store and never shown. After signing in, pick one of its models with the <b>model</b> button in a session. Whether a subscription may be used from third-party tools is up to the provider's terms. Anthropic currently charges third-party apps to your <b>extra usage</b> balance, not your plan limits: with no balance the model answers HTTP 400 (add credit at claude.ai/settings/usage).</div>
     <div style="margin:14px 0 4px;font-weight:600;border-top:1px solid var(--line);padding-top:10px">OpenAI-compatible endpoints</div>
     <div id="llmEndpoints">${d.endpoints.length ? d.endpoints.map(e => `<div class="mcp-row" style="grid-template-columns:140px 1fr auto"><b>${esc(e.name)}</b><span class="hint">${esc(e.baseUrl)} · ${e.models.length} model${e.models.length === 1 ? "" : "s"}: ${esc(e.models.slice(0, 4).join(", "))}${e.models.length > 4 ? " …" : ""}${e.hasKey ? " · key set" : ""}</span><button class="b small danger" data-eprm="${esc(e.name)}">✕</button></div>`).join("") : '<span class="hint">none yet</span>'}</div>
     <div class="form" style="margin-top:8px"><label>server</label><select id="epPreset">${d.presets.map(p => `<option value="${esc(p.id)}" data-url="${esc(p.baseUrl)}">${esc(p.label)}</option>`).join("")}</select>
