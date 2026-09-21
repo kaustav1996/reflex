@@ -25,6 +25,8 @@ import {
 	type VoiceProviderId,
 } from "./config.js";
 import { JEV_LABEL, listJevModels } from "./extensions/typesafe/provider.js";
+import { COMPAT_PRESETS, listEndpointModels, saveCompatProvider, SUBSCRIPTION_LOGINS } from "./llm/providers.js";
+import { spawn } from "node:child_process";
 import { piStoredApiKey } from "./extensions/typesafe/state.js";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -44,6 +46,19 @@ const LLM_PROVIDERS: Array<{ id: string; name: string; hint: string }> = [
 	{ id: "deepseek", name: "DeepSeek", hint: "DEEPSEEK_API_KEY" },
 	{ id: "mistral", name: "Mistral", hint: "MISTRAL_API_KEY" },
 ];
+
+/** Ways in that are not an API key: a subscription sign-in, or your own OpenAI-compatible server. */
+const SIGN_IN_CHOICES = [
+	...SUBSCRIPTION_LOGINS.map((p) => ({ name: `${p.label} (no API key)`, value: `oauth:${p.id}`, description: p.hint })),
+	{ name: "OpenAI-compatible endpoint (Ollama, LM Studio, LiteLLM, vLLM, a proxy…)", value: "compat", description: "base URL + optional key" },
+];
+
+function openInBrowser(url: string): void {
+	try {
+		const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+		spawn(cmd, process.platform === "win32" ? ["/c", "start", "", url] : [url], { stdio: "ignore", detached: true }).unref();
+	} catch {}
+}
 
 /** Curated OpenRouter defaults for coding; anything else can be typed in. */
 const OPENROUTER_PICKS = [
@@ -106,21 +121,65 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 
 	// ── 1. LLM provider ────────────────────────────────────────────────────
 	console.log(bold("1/4  Language model (System Two)"));
-	const providerId = await select({
+	const picked = await select({
 		message: "Which LLM provider should power the agent?",
-		choices: LLM_PROVIDERS.map((p) => ({ name: p.name, value: p.id, description: dim(p.hint) })),
+		choices: [...LLM_PROVIDERS.map((p) => ({ name: p.name, value: p.id, description: dim(p.hint) })), ...SIGN_IN_CHOICES.map((c) => ({ ...c, description: dim(c.description) }))],
 		default: config.llm.provider ?? "openrouter",
 	});
-	const llmKey = await askKey(LLM_PROVIDERS.find((p) => p.id === providerId)?.name.split(" (")[0] ?? providerId, providerId, false);
-	if (llmKey && !llmKey.fromEnv) {
-		await runtime.login(providerId, "api_key", {
-			prompt: async () => llmKey.key,
-			notify: () => {},
+	let providerId = picked;
+	let llmKey: { key: string; fromEnv: boolean } | undefined;
+	let compatModels: string[] | undefined;
+	if (picked.startsWith("oauth:")) {
+		// Subscription sign-in: Pi's own OAuth flow; we only show its prompts and open its URL.
+		providerId = picked.slice("oauth:".length);
+		console.log(dim("  A browser window opens for the sign-in. Whether a subscription may be used from third-party tools is up to the provider's terms."));
+		await runtime.login(providerId, "oauth", {
+			prompt: async (p) => {
+				if (p.type === "select") return select({ message: p.message, choices: p.options.map((o) => ({ name: o.label, value: o.id, description: o.description })) });
+				if (p.type === "secret") return password({ message: p.message, mask: "•" });
+				return input({ message: p.message });
+			},
+			notify: (ev) => {
+				if (ev.type === "auth_url") {
+					console.log(`  ${ok("→")} ${ev.url}${ev.instructions ? dim(`\n    ${ev.instructions}`) : ""}`);
+					openInBrowser(ev.url);
+				} else if (ev.type === "device_code") {
+					console.log(`  ${ok("→")} open ${ev.verificationUri} and enter ${bold(ev.userCode)}`);
+					openInBrowser(ev.verificationUri);
+				} else console.log(dim(`  ${ev.message}`));
+			},
 		});
+		console.log(ok("  ✓ signed in"));
+	} else if (picked === "compat") {
+		const presetId = await select({ message: "Which kind of server?", choices: COMPAT_PRESETS.map((c) => ({ name: c.label, value: c.id, description: dim(c.baseUrl) })) });
+		const preset = COMPAT_PRESETS.find((c) => c.id === presetId)!;
+		const baseUrl = (await input({ message: "Base URL (the part before /chat/completions):", default: preset.baseUrl })).trim();
+		const key = (await password({ message: `API key${preset.needsKey ? "" : " (leave empty if the server needs none)"}:`, mask: "•" })).trim();
+		providerId = (await input({ message: "Name for this provider:", default: preset.id === "custom" ? "my-llm" : preset.id })).trim().toLowerCase();
+		let ids: string[] = [];
+		try {
+			ids = await listEndpointModels(baseUrl, key || undefined);
+			console.log(ok(`  ✓ ${ids.length} models found at ${baseUrl}`));
+		} catch (err) {
+			console.log(warn(`  could not list models (${err instanceof Error ? err.message : err}); type the id instead`));
+		}
+		const first = ids.length ? await select({ message: "Default model:", choices: ids.slice(0, 40).map((id) => ({ name: id, value: id })) }) : (await input({ message: "Model id:" })).trim();
+		compatModels = [...new Set([first, ...ids])].slice(0, 60);
+		saveCompatProvider({ name: providerId, baseUrl, apiKey: key || undefined, models: compatModels });
+		console.log(ok(`  ✓ saved provider "${providerId}" to ${agentDir}/models.json`));
+	} else {
+		llmKey = await askKey(LLM_PROVIDERS.find((p) => p.id === providerId)?.name.split(" (")[0] ?? providerId, providerId, false);
+		if (llmKey && !llmKey.fromEnv) {
+			await runtime.login(providerId, "api_key", {
+				prompt: async () => llmKey!.key,
+				notify: () => {},
+			});
+		}
 	}
 
 	let modelId = config.llm.model;
-	const catalog = runtime.getModels(providerId).map((m) => m.id);
+	// A provider added a moment ago is not in this runtime's catalog yet; use the ids we just saved.
+	const catalog = compatModels ?? runtime.getModels(providerId).map((m) => m.id);
 	const picks = providerId === "openrouter" ? OPENROUTER_PICKS.filter((id) => catalog.includes(id)) : catalog.slice(0, 12);
 	const modelChoice = await select({
 		message: "Default model:",

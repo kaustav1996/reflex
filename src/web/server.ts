@@ -37,6 +37,7 @@ import { buildPresetConfig, persistServer, removeConnector } from "../extensions
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
+import { answerLogin, cancelLogin, COMPAT_PRESETS, getLogin, listCompatProviders, listEndpointModels, logoutProvider, removeCompatProvider, saveCompatProvider, startLogin, storedAuthType, SUBSCRIPTION_LOGINS } from "../llm/providers.js";
 import { asProvider, chosenProvider, JEV_LABEL, jevModelFor, jevRouteFor, listJevModels } from "../extensions/typesafe/provider.js";
 import { ghLogin, githubAuth } from "../artifacts/github.js";
 import { type ProviderName, startCliLogin } from "../artifacts/providers.js";
@@ -795,6 +796,58 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					return void res.end();
 				}
 				return;
+			}
+			// ---- LLM access without an API key: subscription sign-in and OpenAI-compatible endpoints ----
+			if (url.pathname === "/api/llm" && req.method === "GET") {
+				return json(res, 200, { subscriptions: SUBSCRIPTION_LOGINS.map((p) => ({ ...p, auth: storedAuthType(p.id) ?? null })), endpoints: listCompatProviders(), presets: COMPAT_PRESETS });
+			}
+			if (url.pathname === "/api/llm/login" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { provider?: string };
+				try {
+					return json(res, 200, { session: startLogin(body.provider ?? "") });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			const lm = url.pathname.match(/^\/api\/llm\/login\/([a-f0-9-]{6,})(?:\/(answer))?$/);
+			if (lm) {
+				const session = getLogin(lm[1]);
+				if (!session) return json(res, 404, { error: "no such sign-in" });
+				if (!lm[2] && req.method === "GET") return json(res, 200, { session });
+				if (!lm[2] && req.method === "DELETE") {
+					cancelLogin(lm[1]);
+					return json(res, 200, { ok: true });
+				}
+				if (lm[2] === "answer" && req.method === "POST") {
+					const body = JSON.parse((await readBody(req)).toString("utf8")) as { value?: string };
+					return json(res, 200, { ok: answerLogin(lm[1], String(body.value ?? "")) });
+				}
+			}
+			const lo = url.pathname.match(/^\/api\/llm\/logout\/([a-z0-9-]+)$/);
+			if (lo && req.method === "POST") {
+				await logoutProvider(lo[1]);
+				return json(res, 200, { ok: true });
+			}
+			if (url.pathname === "/api/llm/endpoints/models" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { baseUrl?: string; apiKey?: string };
+				try {
+					return json(res, 200, { models: await listEndpointModels(body.baseUrl ?? "", body.apiKey || undefined) });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/llm/endpoints" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { name?: string; baseUrl?: string; apiKey?: string; models?: string[] };
+				try {
+					return json(res, 200, { endpoint: saveCompatProvider({ name: body.name ?? "", baseUrl: body.baseUrl ?? "", apiKey: body.apiKey, models: body.models ?? [] }) });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			const le = url.pathname.match(/^\/api\/llm\/endpoints\/([a-z0-9-]+)$/);
+			if (le && req.method === "DELETE") {
+				removeCompatProvider(le[1]);
+				return json(res, 200, { ok: true });
 			}
 			if (url.pathname === "/api/jev/models" && req.method === "GET") {
 				const provider = asProvider(url.searchParams.get("provider"));

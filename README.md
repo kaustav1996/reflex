@@ -93,12 +93,20 @@ reflex            # first run starts onboarding
 
 Onboarding asks for three things, or picks them up from your environment or a `.env`:
 
-1. An LLM provider key: OpenRouter (one key for every model), or Anthropic, OpenAI, Gemini,
-   Groq, xAI, DeepSeek or Mistral. Pi stores it in `~/.reflex/agent/auth.json`.
+1. A language model, in one of three ways. An API key: OpenRouter (one key for every model),
+   Anthropic, OpenAI, Gemini, Groq, xAI, DeepSeek or Mistral. A subscription sign-in: Claude
+   (Pro or Max), ChatGPT (Plus or Pro) or GitHub Copilot, through the provider's own browser
+   login. Or your own OpenAI-compatible endpoint, such as Ollama, LM Studio, LiteLLM or vLLM.
+   Pi stores credentials in `~/.reflex/agent/auth.json` and endpoints in `models.json`.
 2. Where to reach Jev (TypeSafe directly or OpenRouter), the Jev model to use there, and your
    risk appetite. OpenRouter can reuse the key from step 1.
 3. A voice provider: Sarvam (22 Indian languages and English, with language detection and
    optional translation to English), OpenAI, Groq, Deepgram, or local whisper.cpp.
+
+The same choices are in the web UI under Settings → LLM access: sign in or out of a
+subscription, and add an endpoint by base URL (Reflex asks the server for its models). The
+sign-in is Pi's built-in flow, and whether a subscription may be used from third-party tools is
+up to that provider's terms. Jev is separate and always comes from TypeSafe or OpenRouter.
 
 Run `reflex setup` to change any of this and `reflex doctor` to check the installation.
 

@@ -887,7 +887,7 @@ function paintRun(v) {
 // ── settings ─────────────────────────────────────────────────────────────
 async function loadSettings() {
   const d = await api("/api/settings"); state.settings = d; const c = d.config;
-  const PAGES = { keys: "Keys", reflex: "Reflex layer", voice: "Voice", browser: "Browser agent", look: "Look & model", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", logs: "Logs" };
+  const PAGES = { keys: "Keys", llm: "LLM access", reflex: "Reflex layer", voice: "Voice", browser: "Browser agent", look: "Look & model", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", logs: "Logs" };
   if (!PAGES[state.settingsPage]) state.settingsPage = "keys";
   const nav = $("#settingsNav"); nav.innerHTML = Object.entries(PAGES).map(([k, label]) => `<div class="sess" data-k="${k}">${label}</div>`).join("");
   nav.querySelectorAll(".sess").forEach(el => el.onclick = () => showSettingsPage(el.dataset.k));
@@ -908,6 +908,7 @@ async function loadSettings() {
     <div class="card" id="s-browser"><h3>Browser agent</h3><div class="form"><label>headless</label>${opt("browser.headless", c.browser.headless, [false, true])}<label>attach to Chrome</label><input data-cfg="browser.attachUrl" value="${esc(c.browser.attachUrl || "")}" placeholder="http://127.0.0.1:9222 (your own Chrome with --remote-debugging-port)"><label>text model</label><input data-cfg="browser.textModel" value="${esc(c.browser.textModel || "")}" placeholder="default: session model"><label>max steps</label><input data-cfg="browser.maxSteps" type="number" value="${c.browser.maxSteps}" style="width:90px"></div></div>
     <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light"])}<label>default model</label><input data-cfg="llm.model" value="${esc(c.llm.model || "")}"><label>provider</label><input data-cfg="llm.provider" value="${esc(c.llm.provider || "")}"></div></div>
     <div class="rowbtns" id="sSaveRow"><button class="b primary" id="sSave">save settings</button><span class="hint" id="sMsg">new terminal sessions pick these up; web sessions after a new tab</span></div>
+    <div class="card" id="s-llm"><h3>LLM access</h3><div class="hint">Three ways to give Reflex a language model: an API key (Keys page), a subscription sign-in, or your own OpenAI-compatible server. Jev is separate and comes from TypeSafe or OpenRouter (Reflex layer page).</div><div id="llmBody"></div></div>
     <div class="card" id="s-artifacts"><h3>Artifact defaults</h3><div class="hint">Every artifact deploys with these unless it sets its own domain, region or repo visibility on its page (Artifacts tab).</div><div id="artSettingsBody"></div></div>
     <div class="card" id="s-logs"><h3>Call logs</h3><div class="hint">Every TypeSafe (Jev) request with its state, questions and answers; every LLM response with tokens and cost; voice transcriptions; browser-agent steps. From all sessions and agent runs on this machine (~/.reflex/logs/calls.jsonl). Secrets are masked before writing: known keys as <code>[SECRET:NAME]</code>, anything that looks like a credential as <code>[SECRET:#hash]</code>.</div><div id="logsBody"></div></div>
     <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3><div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
@@ -925,6 +926,7 @@ async function loadSettings() {
       <div class="hint" style="margin-top:10px">Every tool of every enabled server becomes a Reflex tool named <code>server__tool</code>, gated by the reflex layer like any other. Stored in ~/.reflex/mcp.json.</div></div>`;
   showSettingsPage(state.settingsPage);
   wireJevChoice(d.jev);
+  drawLlm();
   drawConnectors();
   state.artCfg = d.artifacts; state.artDefaults = d.artifactDefaults || {};
   $("#artSettingsBody").innerHTML = artifactSetup(d.artifacts, true); wireArtifactSetup($("#artSettingsBody"));
@@ -1199,6 +1201,57 @@ function openArtifactDeploy(id, did) {
     else if (ev.type === "deploy_end") { log.textContent += `■ ${ev.deploy.status}${ev.deploy.frontendUrl ? " · " + ev.deploy.frontendUrl : ""}${ev.deploy.error ? "\n" + ev.deploy.error : ""}\n`; state.artEs.close(); if (replayed) setTimeout(() => openArtifact(id, did), 500); }
     else if (ev.type === "deploy_closed") state.artEs.close();
     log.scrollTop = log.scrollHeight; };
+}
+
+// ── LLM access: subscription sign-in (Pi's OAuth flows) and OpenAI-compatible endpoints ──
+async function drawLlm() {
+  const body = $("#llmBody"); if (!body) return;
+  let d; try { d = await api("/api/llm"); } catch (e) { body.innerHTML = `<span class="hint">restart reflex web to use this page (${esc(e.message)})</span>`; return; }
+  body.innerHTML = `
+    <div style="margin:10px 0 4px;font-weight:600">Sign in with a subscription</div>
+    ${d.subscriptions.map(p => `<div class="mcp-row" style="grid-template-columns:170px 1fr auto"><b>${esc(p.label)}</b><span class="${p.auth === "oauth" ? "" : "muted"}">${p.auth === "oauth" ? "✓ signed in" : p.auth === "api_key" ? "an API key is stored for this provider" : esc(p.hint)}</span><span>${p.auth === "oauth" ? `<button class="b small" data-llmout="${esc(p.id)}">sign out</button>` : `<button class="b small primary" data-llmin="${esc(p.id)}">sign in</button>`}</span></div>`).join("")}
+    <div class="hint">Uses the provider's own browser sign-in; the token is stored in Pi's auth store and never shown. After signing in, pick one of its models with the <b>model</b> button in a session. Whether a subscription may be used from third-party tools is up to the provider's terms.</div>
+    <div style="margin:14px 0 4px;font-weight:600;border-top:1px solid var(--line);padding-top:10px">OpenAI-compatible endpoints</div>
+    <div id="llmEndpoints">${d.endpoints.length ? d.endpoints.map(e => `<div class="mcp-row" style="grid-template-columns:140px 1fr auto"><b>${esc(e.name)}</b><span class="hint">${esc(e.baseUrl)} · ${e.models.length} model${e.models.length === 1 ? "" : "s"}: ${esc(e.models.slice(0, 4).join(", "))}${e.models.length > 4 ? " …" : ""}${e.hasKey ? " · key set" : ""}</span><button class="b small danger" data-eprm="${esc(e.name)}">✕</button></div>`).join("") : '<span class="hint">none yet</span>'}</div>
+    <div class="form" style="margin-top:8px"><label>server</label><select id="epPreset">${d.presets.map(p => `<option value="${esc(p.id)}" data-url="${esc(p.baseUrl)}">${esc(p.label)}</option>`).join("")}</select>
+      <label>base URL</label><input id="epUrl" value="${esc(d.presets[0].baseUrl)}" placeholder="http://localhost:11434/v1" spellcheck="false">
+      <label>API key</label><input id="epKey" type="password" placeholder="optional · local servers usually need none" autocomplete="off">
+      <label>name</label><input id="epName" value="${esc(d.presets[0].id)}" placeholder="ollama" spellcheck="false">
+      <label>models</label><div><div class="rowbtns" style="margin:0 0 6px"><button class="b small" id="epProbe">find models</button><input id="epManual" placeholder="or type ids, comma-separated" style="flex:1" spellcheck="false"></div><div id="epModels" class="conn-tools"></div></div></div>
+    <div class="rowbtns"><button class="b small primary" id="epSave">add endpoint</button><span class="hint" id="epMsg">Saved to ${esc(state.settings?.agentDir || "~/.reflex/agent")}/models.json. Its models then appear under the model button as <code>name/model</code>.</span></div>`;
+  body.querySelectorAll("[data-llmin]").forEach(b => b.onclick = () => llmSignIn(b.dataset.llmin, d.subscriptions.find(p => p.id === b.dataset.llmin).label));
+  body.querySelectorAll("[data-llmout]").forEach(b => b.onclick = async () => { await api(`/api/llm/logout/${b.dataset.llmout}`, { method: "POST" }); drawLlm(); });
+  body.querySelectorAll("[data-eprm]").forEach(b => b.onclick = async () => { await api(`/api/llm/endpoints/${b.dataset.eprm}`, { method: "DELETE" }); drawLlm(); });
+  const preset = $("#epPreset"); preset.onchange = () => { const o = preset.selectedOptions[0]; $("#epUrl").value = o.dataset.url; $("#epName").value = o.value === "custom" ? "my-llm" : o.value; $("#epModels").innerHTML = ""; };
+  $("#epProbe").onclick = async () => { const m = $("#epModels"); m.innerHTML = '<span class="hint">asking the server…</span>'; try { const r = await api("/api/llm/endpoints/models", { method: "POST", body: JSON.stringify({ baseUrl: $("#epUrl").value, apiKey: $("#epKey").value }), headers: { "Content-Type": "application/json" } }); m.innerHTML = r.models.length ? r.models.slice(0, 80).map((id, i) => `<label style="border:1px solid var(--line);padding:2px 6px;font-size:12px"><input type="checkbox" value="${esc(id)}" ${i < 8 ? "checked" : ""} style="vertical-align:middle"> ${esc(id)}</label>`).join("") : '<span class="hint">the server listed no models; type the ids</span>'; } catch (e) { m.innerHTML = `<span class="hint">✗ ${esc(e.message)}</span>`; } };
+  $("#epSave").onclick = async () => { const models = [...$("#epModels").querySelectorAll("input:checked")].map(i => i.value).concat($("#epManual").value.split(",").map(x => x.trim()).filter(Boolean)); try { await api("/api/llm/endpoints", { method: "POST", body: JSON.stringify({ name: $("#epName").value, baseUrl: $("#epUrl").value, apiKey: $("#epKey").value, models }), headers: { "Content-Type": "application/json" } }); notice("info", `added ${$("#epName").value} · pick its model with the model button in a session`); drawLlm(); } catch (e) { $("#epMsg").textContent = "✗ " + e.message; } };
+}
+/** Follow one of Pi's sign-in flows: open the consent page, answer whatever it asks, wait for it to finish. */
+async function llmSignIn(provider, label) {
+  const { session } = await api("/api/llm/login", { method: "POST", body: JSON.stringify({ provider }), headers: { "Content-Type": "application/json" } });
+  const o = $("#overlay"); o.classList.add("show"); $("#dTitle").textContent = `Sign in · ${label}`;
+  const bodyEl = $("#dBody"), opts = $("#dOpts"), row = $("#dRow"); let opened = false, shownPrompt = "", stop = false;
+  const close = () => { stop = true; hideDialog(); drawLlm(); };
+  const cancel = document.createElement("button"); cancel.className = "b"; cancel.textContent = "Cancel"; cancel.onclick = async () => { await api(`/api/llm/login/${session.id}`, { method: "DELETE" }).catch(() => {}); close(); };
+  row.innerHTML = ""; row.appendChild(cancel); opts.innerHTML = ""; bodyEl.textContent = "starting…";
+  const tick = async () => { if (stop) return;
+    let s; try { s = (await api(`/api/llm/login/${session.id}`)).session; } catch { return close(); }
+    if (s.status === "done") { notice("info", `${label}: signed in. Pick a model with the model button in a session.`); return close(); }
+    if (s.status === "error" || s.status === "cancelled") { bodyEl.textContent = `✗ ${s.error || s.status}`; cancel.textContent = "Close"; return; }
+    const lines = [...s.messages.slice(-3)];
+    if (s.deviceCode) lines.unshift(`Enter this code at ${s.deviceCode.verificationUri}:  ${s.deviceCode.userCode}`);
+    if (s.url) lines.unshift(s.instructions || "Finish the sign-in in the browser tab that opened. This dialog closes by itself when it is done.");
+    bodyEl.textContent = lines.join("\n\n") || "waiting for the provider…";
+    const target = s.url || s.deviceCode?.verificationUri;
+    if (target && !opened) { opened = true; window.open(target, "_blank", "noopener"); const a = document.createElement("a"); a.href = target; a.target = "_blank"; a.rel = "noopener"; a.className = "b"; a.textContent = "open the sign-in page again"; row.prepend(a); }
+    const key = s.prompt ? s.prompt.type + s.prompt.message : "";
+    if (key !== shownPrompt) { shownPrompt = key; opts.innerHTML = "";
+      if (s.prompt) { const send = (value) => api(`/api/llm/login/${session.id}/answer`, { method: "POST", body: JSON.stringify({ value }), headers: { "Content-Type": "application/json" } });
+        const lab = document.createElement("div"); lab.className = "muted"; lab.textContent = s.prompt.message; opts.appendChild(lab);
+        if (s.prompt.type === "select") s.prompt.options.forEach(op => { const b = document.createElement("button"); b.className = "b"; b.textContent = op.label + (op.description ? " · " + op.description : ""); b.onclick = () => send(op.id); opts.appendChild(b); });
+        else { const inp = document.createElement("input"); inp.type = s.prompt.type === "secret" ? "password" : "text"; inp.placeholder = s.prompt.placeholder || (s.prompt.type === "manual_code" ? "paste the code shown after you approve" : ""); inp.autocomplete = "off"; const ok = document.createElement("button"); ok.className = "b primary"; ok.textContent = "Continue"; ok.onclick = () => { if (inp.value.trim()) send(inp.value.trim()); }; inp.onkeydown = e => { if (e.key === "Enter") ok.click(); }; opts.append(inp, ok); } } }
+    setTimeout(tick, 1200); };
+  tick();
 }
 
 // ── Jev: the user picks the provider, then one of that provider's models ───────
