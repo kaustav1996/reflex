@@ -37,6 +37,7 @@ import { getReflexHome, loadReflexConfig as loadCfg, saveReflexConfig, SERVICE_E
 import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/client.js";
 import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
 import { PRESET_META } from "../extensions/mcp/presets.js";
+import { listOtherSkills, listPackageSkills, setPackageSkills } from "../skills/packages.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
 import { deleteGlobalHook, EVENT_HELP, globalHooksPath, HOOK_EVENTS, listGlobalHooks, saveGlobalHook } from "../hooks/store.js";
@@ -667,10 +668,12 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				return json(res, 200, { ok: true, shadowed });
 			}
 			if (url.pathname === "/api/packages" && req.method === "POST") {
-				const body = JSON.parse((await readBody(req)).toString("utf8")) as { action: "install" | "remove"; source: string };
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { action: "install" | "remove"; source: string; skills?: "all" | "none" };
 				if (!/^(npm:|git:|https?:\/\/|ssh:\/\/|\/|\.\/)/.test(body.source ?? "")) return json(res, 400, { error: "source must be npm:<pkg>, git:<host/user/repo>, an https URL or a local path" });
 				try {
 					const { stdout, stderr } = await run(process.execPath, [cliPath(), body.action, body.source], { timeout: 300000, env: { ...process.env, PI_TELEMETRY: "0", GIT_TERMINAL_PROMPT: "0" } });
+					// "Start with none": install, then switch every skill off so the user picks what loads.
+					if (body.action === "install" && body.skills === "none") await setPackageSkills(body.source, []);
 					return json(res, 200, { ok: true, output: `${stdout}\n${stderr}`.trim() });
 				} catch (err) {
 					const e = err as { stdout?: string; stderr?: string; message: string };
@@ -720,6 +723,35 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				} finally {
 					rmSync(tmp, { recursive: true, force: true });
 				}
+			}
+			// Skills that come from installed packages, with which of them load (see src/skills/packages.ts).
+			if (url.pathname === "/api/skills/packages" && req.method === "GET") {
+				try {
+					return json(res, 200, { packages: await listPackageSkills(), others: await listOtherSkills() });
+				} catch (err) {
+					return json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/skills/packages" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { source?: string; selection?: "all" | string[] };
+				if (!body.source || !(body.selection === "all" || Array.isArray(body.selection))) return json(res, 400, { error: "source and selection (\"all\" or a list of skill patterns) required" });
+				try {
+					const known = (await listPackageSkills()).find((p) => p.source === body.source);
+					if (!known) return json(res, 404, { error: `package ${body.source} has no skills here` });
+					const patterns = new Set(known.skills.map((s) => s.pattern));
+					if (Array.isArray(body.selection) && body.selection.some((p) => !patterns.has(p))) return json(res, 400, { error: "unknown skill in selection" });
+					await setPackageSkills(body.source, body.selection);
+					return json(res, 200, { ok: true, package: (await listPackageSkills()).find((p) => p.source === body.source) });
+				} catch (err) {
+					return json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/skills/package-doc" && req.method === "GET") {
+				// Only files that are a listed package skill can be read through here.
+				const path = url.searchParams.get("path") ?? "";
+				const skill = [...(await listPackageSkills()).flatMap((p) => p.skills), ...(await listOtherSkills())].find((s) => s.path === path);
+				if (!skill) return json(res, 404, { error: "not a package skill" });
+				return json(res, 200, { path, content: readFileSync(path, "utf8"), files: readdirSync(dirname(path)) });
 			}
 			const skm = url.pathname.match(/^\/api\/skills\/([A-Za-z0-9._-]+)$/);
 			if (skm && req.method === "DELETE") {

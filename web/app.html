@@ -208,6 +208,10 @@
   .conn-filter { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
   .conn-filter input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); flex: 1; min-width: 180px; }
   .conn-filter .b.on { background: var(--pink); color: #1e1e1e; border-color: var(--pink); }
+  .sk-sec { margin-top: 12px; }
+  .sk-h { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+  .sk-on { flex-shrink: 0; padding: 2px; cursor: pointer; }
+  .sk-on input { width: 16px; height: 16px; cursor: pointer; }
   .rec-card { border: 1px solid var(--line); padding: 10px; margin: 6px 0 10px; box-shadow: 2px 2px 0 var(--pink); }
   .rec-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
   .conn-src { font-size: 9px; font-weight: 700; letter-spacing: .04em; border: 1px solid var(--gray); color: var(--gray); padding: 0 3px; vertical-align: middle; }
@@ -981,9 +985,9 @@ async function loadSettings() {
     <div class="card" id="s-hooks"><h3>Hooks</h3><div class="hint">When a session does X, run Y. A hook fires on a session event, optionally narrowed by a matcher and by a TypeSafe yes/no question, and then starts one of your workflow agents or runs a shell command. Each firing shows in the session as a <b>hook</b> line and in Logs. These are your global hooks (every project); a project can add its own in <code>.reflex/hooks.json</code>, which stay off until you approve that file in a session.</div><div id="hooksBody"></div></div>
     <div class="card" id="s-logs"><h3>Call logs</h3><div class="hint">Every TypeSafe (Jev) request with its state, questions and answers; every LLM response with tokens and cost; voice transcriptions; browser-agent steps. From all sessions and agent runs on this machine (~/.reflex/logs/calls.jsonl). Secrets are masked before writing: known keys as <code>[SECRET:NAME]</code>, anything that looks like a credential as <code>[SECRET:#hash]</code>.</div><div id="logsBody"></div></div>
     <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3>
-      ${(() => { const src = ECC_SOURCE, on = (d.packages || []).some(p => String(typeof p === "string" ? p : p.source).includes("affaan-m/ECC")); return `<div class="rec-card"><div class="rec-head"><b>ECC</b> <span class="conn-src">recommended</span> <a href="https://github.com/affaan-m/ECC" target="_blank">github.com/affaan-m/ECC ↗</a><span style="flex:1"></span>${on ? `<span class="b small" style="cursor:default">✓ installed</span><button class="b small" id="eccBtn" data-act="remove">remove</button>` : `<button class="b small primary" id="eccBtn" data-act="install">install ECC</button>`}</div>
+      ${(() => { const src = ECC_SOURCE, on = (d.packages || []).some(p => String(typeof p === "string" ? p : p.source).includes("affaan-m/ECC")); return `<div class="rec-card"><div class="rec-head"><b>ECC</b> <span class="conn-src">recommended</span> <a href="https://github.com/affaan-m/ECC" target="_blank">github.com/affaan-m/ECC ↗</a><span style="flex:1"></span>${on ? `<span class="b small" style="cursor:default">✓ installed</span><button class="b small" id="eccPick">choose skills</button><button class="b small" data-ecc="remove">remove</button>` : `<button class="b small primary" data-ecc="none" title="installs everything, then loads no skills until you pick them in Skills">install · pick skills</button><button class="b small" data-ecc="all">install · all 292 skills</button>`}</div>
         <div class="hint">Skills, commands, rules and session hooks for coding agents, installed as a Pi package: 292 skills and 94 commands (<code>/skill:&lt;name&gt;</code>, <code>/&lt;command&gt;</code>), and ECC's engineering rules added to every prompt. Its MCP servers are separate cards under <b>Connectors</b> (filter <b>ECC</b>); each stays off until you connect it.</div>
-        <div class="hint"><b>Before installing:</b> ECC adds about 46,000 tokens to every request (≈42k for the list of its 292 skills, ≈4.6k for its rules), about ten times Reflex's usual prompt, so each turn costs more and a small-context model may not fit. Its session start and end hooks also run its own scripts on this machine. Source: <code>${esc(src)}</code>.</div></div>`; })()}
+        <div class="hint"><b>Before installing:</b> with all its skills on, ECC adds about 46,000 tokens to every request (≈42k for the list of its 292 skills, ≈4.6k for its rules), about ten times Reflex's usual prompt. <b>Install · pick skills</b> starts with no skills loaded; turn on the ones you want under <b>Skills → ECC</b>, where the page shows what they cost. The ≈4.6k for its rules stays either way. Its session start and end hooks also run its own scripts on this machine. Source: <code>${esc(src)}</code>.</div></div>`; })()}
       <div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
       <div class="rowbtns"><input id="pkgSrc" placeholder="npm:@scope/pkg  ·  git:github.com/user/repo  ·  https://github.com/user/repo" style="flex:1;font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink)"><button class="b small" id="pkgAdd">install</button></div><pre class="out" id="pkgOut" style="display:none"></pre>
       <div class="hint">Browse packages at <a href="https://pi.dev/packages" target="_blank">pi.dev/packages</a>. MCP bridges, sandboxes, subagents and more are packages.</div></div>
@@ -1019,13 +1023,18 @@ async function loadSettings() {
       $("#sMsg").textContent = r.shadowed && r.shadowed.length ? `saved ✓ — but ${r.shadowed.join(", ")} is set in your environment or .env and takes precedence; remove it there to use the saved key` : "saved ✓";
       setTimeout(loadSettings, r.shadowed && r.shadowed.length ? 6000 : 800);
     } catch (e) { $("#sMsg").textContent = "✗ " + e.message; } };
-  $("#eccBtn") && ($("#eccBtn").onclick = async () => {
-    const b = $("#eccBtn"), act = b.dataset.act, out = $("#pkgOut"); b.disabled = true; out.style.display = ""; out.textContent = act === "install" ? "installing ECC (cloning the repository, about 50 MB)…" : "removing ECC…";
-    try { const r = await api("/api/packages", { method: "POST", body: JSON.stringify({ action: act, source: ECC_SOURCE }), headers: { "Content-Type": "application/json" } }); out.textContent = (r.output || "done") + "\nNew sessions pick it up; open a new session to use ECC's skills."; setTimeout(loadSettings, 800); }
-    catch (e) { b.disabled = false; out.textContent = "✗ " + e.message; }
+  $("#eccPick") && ($("#eccPick").onclick = () => showSettingsPage("skills"));
+  document.querySelectorAll("[data-ecc]").forEach(btn => btn.onclick = async () => {
+    const mode = btn.dataset.ecc, out = $("#pkgOut"); document.querySelectorAll("[data-ecc]").forEach(b => b.disabled = true); out.style.display = "";
+    out.textContent = mode === "remove" ? "removing ECC…" : "installing ECC (cloning the repository, about 50 MB)…";
+    try {
+      const r = await api("/api/packages", { method: "POST", body: JSON.stringify(mode === "remove" ? { action: "remove", source: ECC_SOURCE } : { action: "install", source: ECC_SOURCE, skills: mode }), headers: { "Content-Type": "application/json" } });
+      out.textContent = (r.output || "done") + (mode === "none" ? "\nNo ECC skills load yet: choose them under Skills → ECC." : mode === "all" ? "\nAll ECC skills load in new sessions." : "");
+      state.pkgSkills = undefined; setTimeout(loadSettings, 800);
+    } catch (e) { document.querySelectorAll("[data-ecc]").forEach(b => b.disabled = false); out.textContent = "✗ " + e.message; }
   });
-  $("#pkgAdd").onclick = async () => { const out = $("#pkgOut"); out.style.display = ""; out.textContent = "installing…"; try { const r = await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "install", source: $("#pkgSrc").value.trim() }), headers: { "Content-Type": "application/json" } }); out.textContent = r.output || "installed"; setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
-  document.querySelectorAll("[data-rm]").forEach(x => x.onclick = async () => { await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "remove", source: x.dataset.rm }), headers: { "Content-Type": "application/json" } }).catch(e => notice("error", e.message)); loadSettings(); });
+  $("#pkgAdd").onclick = async () => { const out = $("#pkgOut"); out.style.display = ""; out.textContent = "installing…"; try { const r = await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "install", source: $("#pkgSrc").value.trim() }), headers: { "Content-Type": "application/json" } }); out.textContent = r.output || "installed"; state.pkgSkills = undefined; setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
+  document.querySelectorAll("[data-rm]").forEach(x => x.onclick = async () => { await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "remove", source: x.dataset.rm }), headers: { "Content-Type": "application/json" } }).catch(e => notice("error", e.message)); state.pkgSkills = undefined; loadSettings(); });
   $("#skillAdd").onclick = async () => { const out = $("#skillOut"); out.style.display = ""; out.textContent = "cloning…"; try { const r = await api("/api/skills", { method: "POST", body: JSON.stringify({ repo: $("#skillRepo").value.trim(), skill: $("#skillName").value.trim() || undefined }), headers: { "Content-Type": "application/json" } }); out.textContent = "installed: " + r.installed.join(", "); setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
   drawSkills();
 }
@@ -1153,27 +1162,66 @@ state.skillView = null; state.skillQuery = ""; state.skillCache = {};
 function drawSkills() {
   const body = $("#skillBody"); if (!body) return;
   const skills = state.settings.skills || [];
-  if (state.skillView) return drawSkill(body, skills.find(s => s.name === state.skillView) || { name: state.skillView });
+  if (state.pkgSkills === undefined) { state.pkgSkills = null; api("/api/skills/packages").then(r => { state.pkgSkills = r.packages || []; state.otherSkills = r.others || []; drawSkills(); }).catch(() => { state.pkgSkills = []; drawSkills(); }); }
+  const pkgs = state.pkgSkills || [];
+  if (state.skillView) {
+    const pk = [...pkgs.flatMap(p => p.skills), ...(state.otherSkills || []).map(x => ({ ...x, other: true }))].find(x => x.path === state.skillView);
+    return drawSkill(body, pk ? { ...pk, pkg: true } : skills.find(s => s.name === state.skillView) || { name: state.skillView });
+  }
+  state.pkgSel ||= {};
+  for (const p of pkgs) state.pkgSel[p.source] ||= new Set(p.skills.filter(x => x.enabled).map(x => x.pattern));
   const q = state.skillQuery.trim().toLowerCase();
-  const shown = skills.filter(s => !q || `${s.name} ${s.description || ""}`.toLowerCase().includes(q));
-  body.innerHTML = `<input id="skillSearch" placeholder="search ${skills.length} skills…" value="${esc(state.skillQuery)}" spellcheck="false" style="width:100%;font:inherit;padding:6px;margin:10px 0 4px;border:1px solid var(--line);background:var(--paper);color:var(--ink)">
-    <div class="conn-grid">${shown.map(s => `<div class="conn-card" data-skill="${esc(s.name)}" style="align-items:flex-start"><div class="conn-icon">${SKILL_ICON}</div><div class="txt"><div class="conn-name">${esc(s.name)}${s.bundled ? ' <span title="bundled with Reflex" style="color:var(--pink)">⚡</span>' : ""}</div><div class="conn-tag" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">${esc(s.description || "")}</div></div></div>`).join("")}</div>${shown.length ? "" : '<span class="hint">no skills match</span>'}`;
+  const hit = s => !q || `${s.name} ${s.description || ""}`.toLowerCase().includes(q);
+  const card = (s, key, extra = "") => `<div class="conn-card" data-skill="${esc(key)}" style="align-items:flex-start"><div class="conn-icon">${SKILL_ICON}</div><div class="txt"><div class="conn-name">${esc(s.name)}${s.bundled ? ' <span title="bundled with Reflex" style="color:var(--pink)">⚡</span>' : ""}</div><div class="conn-tag" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">${esc(s.description || "")}</div></div>${extra}</div>`;
+  const section = (title, sub, cards) => cards.length ? `<div class="sk-sec"><div class="sk-h"><b>${title}</b>${sub}</div><div class="conn-grid">${cards.join("")}</div></div>` : "";
+  const others = state.otherSkills || [];
+  const total = skills.length + pkgs.reduce((n, p) => n + p.skills.length, 0) + others.length;
+  const otherCards = others.filter(hit).map(s => card(s, s.path));
+  const bundled = skills.filter(s => s.bundled && hit(s)).map(s => card(s, s.name));
+  const own = skills.filter(s => !s.bundled && hit(s)).map(s => card(s, s.name));
+  const pkgHtml = pkgs.map(p => {
+    const sel = state.pkgSel[p.source];
+    const tokens = p.skills.filter(x => sel.has(x.pattern)).reduce((n, x) => n + x.tokens, 0);
+    const saved = new Set(p.skills.filter(x => x.enabled).map(x => x.pattern));
+    const dirty = sel.size !== saved.size || [...sel].some(x => !saved.has(x));
+    const name = /affaan-m\/ECC/.test(p.source) ? "ECC" : p.source.replace(/^(git:|npm:)/, "");
+    const cards = p.skills.filter(hit).map(x => card(x, x.path, `<label class="sk-on" title="load this skill in new sessions"><input type="checkbox" data-pkg="${esc(p.source)}" data-pat="${esc(x.pattern)}" ${sel.has(x.pattern) ? "checked" : ""}></label>`));
+    const head = ` <span class="hint">package · ${sel.size} of ${p.skills.length} on · adds ≈${tokens.toLocaleString()} tokens to every request</span><span style="flex:1"></span><button class="b small" data-all="${esc(p.source)}">all</button><button class="b small" data-none="${esc(p.source)}">none</button><button class="b small${dirty ? " primary" : ""}" data-save="${esc(p.source)}" ${dirty ? "" : "disabled"}>${dirty ? "save" : "saved"}</button>`;
+    return cards.length || !q ? section(esc(name), head, cards.length ? cards : ['<span class="hint">no skills match</span>']) : "";
+  }).join("");
+  body.innerHTML = `<input id="skillSearch" placeholder="search ${total} skills…" value="${esc(state.skillQuery)}" spellcheck="false" style="width:100%;font:inherit;padding:6px;margin:10px 0 4px;border:1px solid var(--line);background:var(--paper);color:var(--ink)">
+    ${section("Bundled with Reflex", "", bundled)}${section("Your skills", ' <span class="hint">~/.reflex/agent/skills</span>', own)}${pkgHtml}${section("Also loaded from other folders", ' <span class="hint">shared folders Pi reads, such as ~/.agents/skills (other agent tools may use them too)</span>', otherCards)}
+    ${state.pkgSkills === null ? '<span class="hint">loading package skills…</span>' : ""}${!bundled.length && !own.length && !pkgHtml ? '<span class="hint">no skills match</span>' : ""}
+    ${pkgs.length ? '<div class="hint">Each loaded skill is listed in every request (name, description and path), so a package\'s cost grows with the skills you leave on. Changes apply to new sessions.</div>' : ""}`;
   const inp = $("#skillSearch"); inp.oninput = () => { state.skillQuery = inp.value; const pos = inp.selectionStart; drawSkills(); const n = $("#skillSearch"); n.focus(); n.setSelectionRange(pos, pos); };
-  body.querySelectorAll("[data-skill]").forEach(el => el.onclick = () => { state.skillView = el.dataset.skill; drawSkills(); $("#settingsPane").scrollTop = 0; });
+  body.querySelectorAll("[data-skill]").forEach(el => el.onclick = e => { if (e.target.closest(".sk-on")) return; state.skillView = el.dataset.skill; drawSkills(); $("#settingsPane").scrollTop = 0; });
+  body.querySelectorAll("[data-pat]").forEach(cb => cb.onchange = () => { const sel = state.pkgSel[cb.dataset.pkg]; cb.checked ? sel.add(cb.dataset.pat) : sel.delete(cb.dataset.pat); drawSkills(); });
+  const pkgOf = src => pkgs.find(p => p.source === src);
+  body.querySelectorAll("[data-all]").forEach(b => b.onclick = () => { state.pkgSel[b.dataset.all] = new Set(pkgOf(b.dataset.all).skills.map(x => x.pattern)); drawSkills(); });
+  body.querySelectorAll("[data-none]").forEach(b => b.onclick = () => { state.pkgSel[b.dataset.none] = new Set(); drawSkills(); });
+  body.querySelectorAll("[data-save]").forEach(b => b.onclick = async () => {
+    const p = pkgOf(b.dataset.save), sel = state.pkgSel[p.source];
+    const selection = sel.size === p.skills.length ? "all" : [...sel];
+    b.disabled = true; b.textContent = "saving…";
+    try { const r = await api("/api/skills/packages", { method: "POST", body: JSON.stringify({ source: p.source, selection }), headers: { "Content-Type": "application/json" } }); Object.assign(p, r.package); state.pkgSel[p.source] = new Set(p.skills.filter(x => x.enabled).map(x => x.pattern)); notice("info", `saved: ${p.enabledCount} of ${p.skills.length} skills load in new sessions`); }
+    catch (e) { notice("error", e.message); }
+    drawSkills();
+  });
 }
 async function drawSkill(body, s) {
-  const cached = state.skillCache[s.name];
+  const key = s.pkg ? s.path : s.name;
+  const cached = state.skillCache[key];
   body.innerHTML = `<span class="back" id="skBack">← all skills</span>
     <div class="conn-head"><div class="conn-icon">${SKILL_ICON}</div><div><h2>${esc(s.name)}${s.bundled ? ' <span style="color:var(--pink);font-size:14px" title="bundled with Reflex">⚡ bundled</span>' : ""}</h2><div class="sub" id="skPath">${esc(cached?.path || "")}</div></div>
-      <div class="conn-actions">${s.bundled ? '<span class="hint">refreshed on every start</span>' : `<button class="b danger" id="skRemove">remove</button>`}</div></div>
+      <div class="conn-actions">${s.other ? `<span class="hint">loaded from a shared folder; remove it there</span>` : s.pkg ? `<span class="hint">from a package · ${s.enabled ? "loads in new sessions" : "off"} · ≈${s.tokens} tokens</span>` : s.bundled ? '<span class="hint">refreshed on every start</span>' : `<button class="b danger" id="skRemove">remove</button>`}</div></div>
     ${s.description ? `<div class="conn-about">${esc(s.description)}</div>` : ""}
     <div id="skFiles" class="conn-tools"></div>
     <h3 style="margin:14px 0 4px">SKILL.md</h3><div id="skDoc" class="hint">loading…</div>`;
   $("#skBack").onclick = () => { state.skillView = null; drawSkills(); };
   $("#skRemove") && ($("#skRemove").onclick = async () => { await api(`/api/skills/${encodeURIComponent(s.name)}`, { method: "DELETE" }); state.skillView = null; delete state.skillCache[s.name]; loadSettings(); });
   try {
-    const d = cached || (state.skillCache[s.name] = await api(`/api/skills/${encodeURIComponent(s.name)}`));
-    if (state.skillView !== s.name) return;
+    const d = cached || (state.skillCache[key] = await api(s.pkg ? `/api/skills/package-doc?path=${encodeURIComponent(s.path)}` : `/api/skills/${encodeURIComponent(s.name)}`));
+    if (state.skillView !== key) return;
     $("#skPath").textContent = d.path;
     $("#skFiles").innerHTML = (d.files || []).map(f => `<span>${esc(f)}</span>`).join("");
     const doc = $("#skDoc"); doc.className = "conn-about"; doc.innerHTML = md(d.content.replace(/^---[\s\S]*?\n---\n?/, ""));
