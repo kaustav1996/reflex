@@ -61,6 +61,7 @@ export function createAgentsExtension(): (pi: ExtensionAPI) => void {
 			],
 			parameters: Type.Object({
 				steps: Type.Optional(Type.String({ description: "Workflow steps as a JSON array (preferred over a bare prompt): shell → decide → llm priority. See skill reflex-agents for the schema." })),
+				limits: Type.Optional(Type.String({ description: 'Hard stops for one run as JSON, e.g. {"maxCostUsd":0.25,"maxJevCalls":50,"maxLlmRuns":2,"maxSteps":40}. Always set maxCostUsd for scheduled agents.' })),
 				name: Type.String({ description: "Agent name (human-readable, e.g. 'Nightly test report')" }),
 				prompt: Type.String({ description: "What to do each run. {{input}} = trigger payload, {{now}} = timestamp" }),
 				cwd: Type.Optional(Type.String({ description: "Working directory for runs (default: current cwd)" })),
@@ -86,6 +87,7 @@ export function createAgentsExtension(): (pi: ExtensionAPI) => void {
 				const tools = p.tools ? String(p.tools).split(",").map((s) => s.trim()).filter(Boolean) : undefined;
 				const agent = saveAgent({
 					steps: p.steps ? (JSON.parse(p.steps) as never) : undefined,
+					limits: p.limits ? (JSON.parse(p.limits) as never) : undefined,
 					name: p.name.trim(),
 					description: p.description?.trim(),
 					cwd: resolveCwd(p.cwd),

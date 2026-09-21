@@ -26,7 +26,7 @@ export function startScheduler(log: (msg: string) => void = () => {}): () => voi
 				if (fired.get(key) === stamp || !cronMatches(spec, now)) return;
 				fired.set(key, stamp);
 				log(`cron → ${agent.name} (${t.schedule})`);
-				void runAgent(agent, { type: "cron" }, t.input);
+				void runAgent(agent, { type: "cron" }, t.input, undefined, { idempotencyKey: `cron:${i}:${stamp}` });
 			});
 		}
 	};

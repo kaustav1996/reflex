@@ -41,7 +41,7 @@ export async function runAgentCli(args: string[]): Promise<void> {
 		case "runs": {
 			const id = rest[0];
 			if (!id) throw new Error("usage: reflex agent runs <id>");
-			for (const r of listRuns(id, 20)) console.log(`${r.status.padEnd(9)} ${r.id}  ${new Date(r.startedAt).toLocaleString()}  ${r.trigger.type}${r.trigger.from ? ` ← ${r.trigger.from}` : ""}  ${r.toolCalls} tools${r.output ? `  · ${r.output.split("\n")[0].slice(0, 60)}` : ""}`);
+			for (const r of listRuns(id, 20)) console.log(`${r.status.padEnd(9)} ${r.id}  ${new Date(r.startedAt).toLocaleString()}  ${r.trigger.type}${r.trigger.from ? ` ← ${r.trigger.from}` : ""}${r.cost ? `  $${r.cost.totalUsd.toFixed(4)}` : ""}${r.resumes ? `  resumed×${r.resumes}` : ""}  ${r.toolCalls} tools${r.output ? `  · ${r.output.split("\n")[0].slice(0, 60)}` : ""}`);
 			return;
 		}
 		case "create": {
@@ -55,6 +55,22 @@ export async function runAgentCli(args: string[]): Promise<void> {
 			const a = saveAgent({ name, prompt, cwd: flag("--cwd") ?? process.cwd(), model: flag("--model"), reflex: flag("--reflex") as never, instructions: flag("--instructions"), triggers });
 			console.log(`created ${a.id} → ~/.reflex/agents/${a.id}/agent.json`);
 			for (const t of a.triggers) if (t.type === "webhook") console.log(`webhook: POST http://127.0.0.1:7331/hooks/${a.id}/${t.secret}`);
+			return;
+		}
+		case "resume": {
+			const [agentId, runId] = rest;
+			if (!agentId || !runId) throw new Error("usage: reflex agent resume <agent-id> <run-id>   (continues a failed/timed-out/cancelled workflow run from its last completed step)");
+			const { loadAgent: load } = await import("./store.js");
+			const a = load(agentId);
+			if (!a) throw new Error(`unknown agent ${agentId}`);
+			const { resumeRun } = await import("./runner.js");
+			const r = await resumeRun(a, runId, (_r, ev) => {
+				const e = ev as { type?: string; id?: string; stepType?: string; ok?: boolean; run?: { completed?: string[]; nextStep?: string } };
+				if (e.type === "run_resumed") console.log(`↻ resuming after [${(e.run?.completed ?? []).join(", ")}] → next: ${e.run?.nextStep}`);
+				if (e.type === "step_end") console.log(`${e.ok ? "✓" : "✗"} ${e.stepType} ${e.id}`);
+			});
+			console.log(`${r.status}${r.error ? `: ${r.error}` : ""}${r.cost ? ` · $${r.cost.totalUsd.toFixed(4)} · ${r.cost.jevCalls} jev · ${r.cost.llmRuns} llm` : ""}`);
+			if (r.output) console.log(r.output);
 			return;
 		}
 		case "diagram": {

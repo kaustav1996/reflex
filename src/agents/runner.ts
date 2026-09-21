@@ -8,7 +8,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { type AgentDefinition, type AgentRun, agentSessionsDir, listAgents, loadAgent, newRun, runLogPath, saveRun } from "./store.js";
+import { type AgentDefinition, type AgentRun, agentSessionsDir, listAgents, loadAgent, newRun, runLogPath, saveRun, emptyCost, findRunByKey, loadCheckpoint, loadRun, saveCheckpoint, type RunCheckpoint } from "./store.js";
 import { runWorkflow } from "./workflow.js";
 
 export type RunListener = (run: AgentRun, event: unknown) => void;
@@ -47,14 +47,46 @@ export function cancelRun(runId: string): boolean {
 	return true;
 }
 
-/** Queue a run; resolves when it finishes. */
-export function runAgent(agent: AgentDefinition, trigger: AgentRun["trigger"], input?: string, onEvent?: RunListener): Promise<AgentRun> {
+/**
+ * Queue a run; resolves when it finishes. With an idempotency key, a trigger that already
+ * produced a queued, running or succeeded run returns that run instead of starting another.
+ */
+export function runAgent(agent: AgentDefinition, trigger: AgentRun["trigger"], input?: string, onEvent?: RunListener, opts: { idempotencyKey?: string } = {}): Promise<AgentRun> {
+	if (opts.idempotencyKey) {
+		const existing = findRunByKey(agent.id, opts.idempotencyKey);
+		if (existing) return Promise.resolve(existing);
+	}
 	const run = newRun(agent, trigger, input);
+	if (opts.idempotencyKey) run.idempotencyKey = opts.idempotencyKey;
 	saveRun(run);
+	return enqueue(agent, run, onEvent);
+}
+
+/**
+ * Continue an interrupted workflow run from its last checkpoint: completed steps are not
+ * repeated, variables are restored, and the same run record and event log are extended.
+ */
+export function resumeRun(agent: AgentDefinition, runId: string, onEvent?: RunListener): Promise<AgentRun> {
+	const run = loadRun(agent.id, runId);
+	if (!run) throw new Error(`no run ${runId} for agent ${agent.id}`);
+	if (live.has(run.id)) throw new Error(`run ${runId} is still running`);
+	if (run.status === "succeeded") throw new Error(`run ${runId} already succeeded`);
+	if (!agent.steps?.length) throw new Error("only workflow agents (with steps) can be resumed; a single-prompt agent has no checkpoints");
+	const cp = loadCheckpoint(agent.id, runId);
+	if (!cp) throw new Error(`run ${runId} has no checkpoint (it stopped before its first step finished); start a new run instead`);
+	run.resumes = (run.resumes ?? 0) + 1;
+	run.error = undefined;
+	run.endedAt = undefined;
+	run.status = "queued";
+	saveRun(run);
+	return enqueue(agent, run, onEvent, cp);
+}
+
+function enqueue(agent: AgentDefinition, run: AgentRun, onEvent?: RunListener, resume?: RunCheckpoint): Promise<AgentRun> {
 	return new Promise<AgentRun>((resolveRun) => {
 		const start = () => {
 			busy.add(agent.id);
-			execute(agent, run, onEvent)
+			execute(agent, run, onEvent, resume)
 				.catch((err) => {
 					run.status = "failed";
 					run.error = err instanceof Error ? err.message : String(err);
@@ -74,7 +106,7 @@ export function runAgent(agent: AgentDefinition, trigger: AgentRun["trigger"], i
 	});
 }
 
-async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListener): Promise<AgentRun> {
+async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListener, resume?: RunCheckpoint): Promise<AgentRun> {
 	const sessionsDir = agentSessionsDir(agent.id);
 	mkdirSync(sessionsDir, { recursive: true });
 	const cwd = existsSync(agent.cwd) ? agent.cwd : process.cwd();
@@ -97,7 +129,10 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 
 	// ── Workflow agents: shell → decide → llm steps, code owns the routing ──
 	if (agent.steps?.length) {
-		emit({ type: "run_start", run: { id: run.id, agentId: agent.id, trigger: run.trigger, input: run.input, prompt: `${agent.steps.length} steps` } });
+		run.cost ??= emptyCost();
+		const cost = run.cost;
+		if (resume) emit({ type: "run_resumed", run: { id: run.id, resumes: run.resumes, completed: resume.completed, nextStep: agent.steps[resume.nextIndex]?.id ?? "end" } });
+		else emit({ type: "run_start", run: { id: run.id, agentId: agent.id, trigger: run.trigger, input: run.input, prompt: `${agent.steps.length} steps` } });
 		const timer = setTimeout(() => {
 			run.status = "timeout";
 			controller.abort();
@@ -106,8 +141,14 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 			cwd,
 			emit,
 			signal: controller.signal,
+			limits: agent.limits,
+			cost,
+			checkpoint: (cp) => {
+				saveCheckpoint(run, cp);
+				saveRun(run); // cost so far survives a crash too
+			},
 			runLlm: async (step, prompt, instructions) => {
-				const r = await runLlmProcess({ ...agent, model: step.model ?? agent.model, reflex: step.reflex ?? agent.reflex, tools: step.tools ?? agent.tools, computer: step.computer ?? agent.computer, timeoutMinutes: step.timeoutMinutes ?? agent.timeoutMinutes }, run, prompt, instructions ?? agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
+				const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd === undefined ? undefined : Math.max(0, agent.limits.maxCostUsd - cost.totalUsd), model: step.model ?? agent.model, reflex: step.reflex ?? agent.reflex, tools: step.tools ?? agent.tools, computer: step.computer ?? agent.computer, timeoutMinutes: step.timeoutMinutes ?? agent.timeoutMinutes }, run, prompt, instructions ?? agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
 				run.toolCalls += r.toolCalls;
 				run.reflexBlocks += r.reflexBlocks;
 				return r;
@@ -118,7 +159,7 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 				const r = await runAgent(next, { type: "chain", from: `${agent.id}/${run.id}` }, input);
 				return { status: r.status, output: r.output, error: r.error };
 			},
-		});
+		}, resume);
 		clearTimeout(timer);
 		live.delete(run.id);
 		run.endedAt = Date.now();
@@ -126,7 +167,7 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		if (run.status === "running") run.status = result.status;
 		run.error = result.error;
 		saveRun(run);
-		emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt } });
+		emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt, cost: run.cost } });
 		if (run.status === "succeeded") fireChain(agent, run);
 		return run;
 	}
@@ -138,10 +179,11 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		run.status = "timeout";
 		controller.abort();
 	}, (agent.timeoutMinutes ?? 30) * 60 * 1000);
-	const r = await runLlmProcess(agent, run, prompt, agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
+	const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd }, run, prompt, agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
 	clearTimeout(timer);
 	live.delete(run.id);
 	run.endedAt = Date.now();
+	run.cost = { ...emptyCost(), steps: 1, llmRuns: 1, llmTokens: r.tokens, llmUsd: r.costUsd, totalUsd: r.costUsd };
 	run.toolCalls = r.toolCalls;
 	run.reflexBlocks = r.reflexBlocks;
 	run.output = r.output;
@@ -150,7 +192,7 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		run.error = r.error;
 	}
 	saveRun(run);
-	emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt } });
+	emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt, cost: run.cost } });
 	if (run.status === "succeeded") fireChain(agent, run);
 	return run;
 }
@@ -165,7 +207,7 @@ function fireChain(agent: AgentDefinition, run: AgentRun): void {
 }
 
 /** One headless `reflex --mode json` process. Streams its events through `emit`; returns the final answer. */
-async function runLlmProcess(agent: Pick<AgentDefinition, "id" | "name" | "model" | "reflex" | "tools" | "computer" | "timeoutMinutes">, run: AgentRun, prompt: string, instructions: string | undefined, sessionsDir: string, cwd: string, emit: (ev: unknown) => void, l: LiveRun, signal: AbortSignal): Promise<{ status: "succeeded" | "failed" | "timeout" | "cancelled"; output?: string; toolCalls: number; reflexBlocks: number; error?: string }> {
+async function runLlmProcess(agent: Pick<AgentDefinition, "id" | "name" | "model" | "reflex" | "tools" | "computer" | "timeoutMinutes"> & { maxCostUsd?: number }, run: AgentRun, prompt: string, instructions: string | undefined, sessionsDir: string, cwd: string, emit: (ev: unknown) => void, l: LiveRun, signal: AbortSignal): Promise<{ status: "succeeded" | "failed" | "timeout" | "cancelled"; output?: string; toolCalls: number; reflexBlocks: number; error?: string; costUsd: number; tokens: number }> {
 	const args = ["--mode", "json", "--session-dir", sessionsDir, "--name", `${agent.name} · ${run.id}`, "--reflex", agent.reflex ?? "balanced"];
 	if (agent.model) args.push("--model", agent.model);
 	if (instructions?.trim()) args.push("--append-system-prompt", `You are running as the scheduled/triggered agent "${agent.name}" (run ${run.id}). ${instructions.trim()}`);
@@ -180,6 +222,9 @@ async function runLlmProcess(agent: Pick<AgentDefinition, "id" | "name" | "model
 	let toolCalls = 0;
 	let reflexBlocks = 0;
 	let lastText = "";
+	let costUsd = 0;
+	let tokens = 0;
+	let overBudget = false;
 
 	let buffer = "";
 	let stderr = "";
@@ -191,7 +236,7 @@ async function runLlmProcess(agent: Pick<AgentDefinition, "id" | "name" | "model
 			const line = buffer.slice(0, idx).trim();
 			buffer = buffer.slice(idx + 1);
 			if (!line) continue;
-			let ev: { type?: string; message?: { role?: string; content?: unknown }; toolName?: string; isError?: boolean; result?: { content?: Array<{ type: string; text?: string }> }; sessionFile?: string } | undefined;
+			let ev: { type?: string; message?: { role?: string; content?: unknown; usage?: { input?: number; output?: number; cost?: { total?: number } } }; toolName?: string; isError?: boolean; result?: { content?: Array<{ type: string; text?: string }> }; sessionFile?: string } | undefined;
 			try {
 				ev = JSON.parse(line);
 			} catch {
@@ -204,6 +249,13 @@ async function runLlmProcess(agent: Pick<AgentDefinition, "id" | "name" | "model
 			if (ev.type === "message_end" && ev.message?.role === "assistant") {
 				const text = Array.isArray(ev.message.content) ? (ev.message.content as Array<{ type: string; text?: string }>).filter((c) => c.type === "text").map((c) => c.text ?? "").join("") : "";
 				if (text.trim()) lastText = text;
+				// Every assistant message is one model call: add up what it cost and stop the session at the spend cap.
+				costUsd += ev.message.usage?.cost?.total ?? 0;
+				tokens += (ev.message.usage?.input ?? 0) + (ev.message.usage?.output ?? 0);
+				if (agent.maxCostUsd !== undefined && costUsd >= agent.maxCostUsd && !overBudget) {
+					overBudget = true;
+					proc.kill("SIGTERM");
+				}
 			}
 			emit(ev);
 		}
@@ -215,10 +267,12 @@ async function runLlmProcess(agent: Pick<AgentDefinition, "id" | "name" | "model
 	});
 	const code = await new Promise<number | null>((r) => proc.on("exit", (c) => r(c)));
 	signal.removeEventListener("abort", onAbort);
-	if (run.status === "timeout") return { status: "timeout", output: lastText.trim() || undefined, toolCalls, reflexBlocks, error: "timed out" };
-	if (run.status === "cancelled" || signal.aborted) return { status: "cancelled", output: lastText.trim() || undefined, toolCalls, reflexBlocks };
-	if (code === 0) return { status: "succeeded", output: lastText.trim() || undefined, toolCalls, reflexBlocks };
-	return { status: "failed", output: lastText.trim() || undefined, toolCalls, reflexBlocks, error: stderr.trim().split("\n").slice(-5).join("\n") || `exit code ${code}` };
+	const base = { output: lastText.trim() || undefined, toolCalls, reflexBlocks, costUsd, tokens };
+	if (overBudget) return { ...base, status: "failed", error: `budget: spend limit reached ($${costUsd.toFixed(4)} of $${agent.maxCostUsd}) during the LLM session` };
+	if (run.status === "timeout") return { ...base, status: "timeout", error: "timed out" };
+	if (run.status === "cancelled" || signal.aborted) return { ...base, status: "cancelled" };
+	if (code === 0) return { ...base, status: "succeeded" };
+	return { ...base, status: "failed", error: stderr.trim().split("\n").slice(-5).join("\n") || `exit code ${code}` };
 }
 
 export function attachRunListener(runId: string, fn: RunListener): (() => void) | undefined {

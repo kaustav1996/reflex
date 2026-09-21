@@ -12,7 +12,7 @@ import { createKeyResolver, loadDotEnv, loadReflexConfig } from "../config.js";
 import type { Question } from "../extensions/typesafe/client.js";
 import { createJevClient } from "../extensions/typesafe/provider.js";
 import { piStoredApiKey } from "../extensions/typesafe/state.js";
-import type { AgentDefinition } from "./store.js";
+import { type AgentDefinition, emptyCost, type RunCheckpoint, type RunCost, type RunLimits } from "./store.js";
 
 export interface RouteRule {
 	/** `<path> <op> <value>` with op in == != >= <= > < contains matches; or "default". Paths index into variables, e.g. tests.exitCode, verdict.is_bug.noul. */
@@ -34,11 +34,49 @@ export interface ShellStep extends StepBase {
 	/** Continue even when the exit code is non-zero (then route on `<as>.ok`). */
 	allowFailure?: boolean;
 }
+/**
+ * A decide question. Instructions and criteria are templates, rendered every time the step runs.
+ * A choice can also build its options from a list variable, so the menu always reflects what
+ * exists right now (workers that are available, sources just fetched, files that changed):
+ *
+ *   { "type": "choice", "instructions": "Which worker acts next?",
+ *     "optionsFrom": "workers.json", "optionId": "name", "optionText": "{{item.description}}",
+ *     "criteria": { "review": "Unclear request, or the work is complete." } }
+ *
+ * Static `criteria` are kept alongside the generated options (use them for escapes like "review").
+ */
+export type DecideQuestion = Question & {
+	optionsFrom?: string;
+	/** Field of each item used as the option id (default: id, then name, then the item itself when it is a string). */
+	optionId?: string;
+	/** Template for the option description; `{{item.<field>}}` reads the item (default: description, then the item as text). */
+	optionText?: string;
+};
+
+/**
+ * Ask the same question about every item of a list, in parallel, and rank the answers: the
+ * "filter in code → score the rest → choose among the shortlist" pattern. The step result gets
+ * `ranked` (every item with its value and confidence, best first) and `shortlist` (the top items).
+ */
+export interface ForEachSpec {
+	/** Path to the array variable, e.g. `papers.json`. */
+	from: string;
+	/** Field used as each item's id (default: id, then name, then its index). */
+	id?: string;
+	/** Question template; `{{item.<field>}}` reads the item. Score and noul questions rank by value, choice by confidence. */
+	question: Question;
+	/** State for each item's question (default: the item itself next to the step's state). */
+	top?: number;
+	/** Keep only items whose value is at least this (score level or noul probability). */
+	min?: number;
+}
+
 export interface DecideStep extends StepBase {
 	type: "decide";
 	/** State sent to Jev: a template string or an object of template strings. */
 	state: string | Record<string, unknown>;
-	questions: Record<string, Question>;
+	questions?: Record<string, DecideQuestion>;
+	forEach?: ForEachSpec;
 }
 export interface LlmStep extends StepBase {
 	type: "llm";
@@ -145,26 +183,83 @@ export interface StepEvent {
 
 export interface WorkflowHooks {
 	emit: (ev: StepEvent) => void;
-	/** Runs an LLM step as a headless Reflex session; returns its result. */
-	runLlm: (step: LlmStep, prompt: string, instructions: string | undefined) => Promise<{ status: string; output?: string; toolCalls: number; reflexBlocks: number; error?: string }>;
+	/** Runs an LLM step as a headless Reflex session; returns its result (with what it cost, when known). */
+	runLlm: (step: LlmStep, prompt: string, instructions: string | undefined) => Promise<{ status: string; output?: string; toolCalls: number; reflexBlocks: number; error?: string; costUsd?: number; tokens?: number }>;
+	/** Hard stops for the run; checked before every step. */
+	limits?: RunLimits;
+	/** Running totals, shared with the caller so they end up on the run record. */
+	cost?: RunCost;
+	/** Called after every completed step with everything needed to continue later. */
+	checkpoint?: (cp: RunCheckpoint) => void;
+	/** Jev client override (tests); by default the user's chosen provider and model are used. */
+	jev?: { systemOne: (req: never) => Promise<unknown> };
 	/** Runs another agent and waits. */
 	callAgent: (agentId: string, input: string) => Promise<{ status: string; output?: string; error?: string }>;
 	signal?: AbortSignal;
 	cwd: string;
 }
 
-export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: WorkflowHooks): Promise<{ status: "succeeded" | "failed"; output?: string; vars: Vars; error?: string }> {
-	const vars: Vars = { ...initialVars };
+/** USD per input token on TypeSafe's own API (no output charge); used when the provider does not report a cost. */
+const JEV_USD_PER_TOKEN = 0.042 / 1e6;
+const FOREACH_BATCH = 40;
+const FOREACH_MAX = 400;
+
+/** Which limit the next step would break, if any. */
+export function budgetExceeded(cost: RunCost, limits: RunLimits | undefined, next: Step["type"]): string | undefined {
+	const maxSteps = limits?.maxSteps ?? 200;
+	if (cost.steps >= maxSteps) return `step limit reached (${maxSteps} step executions)`;
+	if (limits?.maxCostUsd !== undefined && cost.totalUsd >= limits.maxCostUsd) return `spend limit reached ($${cost.totalUsd.toFixed(4)} of $${limits.maxCostUsd})`;
+	if (next === "decide" && limits?.maxJevCalls !== undefined && cost.jevCalls >= limits.maxJevCalls) return `TypeSafe call limit reached (${limits.maxJevCalls})`;
+	if (next === "llm" && limits?.maxLlmRuns !== undefined && cost.llmRuns >= limits.maxLlmRuns) return `LLM run limit reached (${limits.maxLlmRuns})`;
+	return undefined;
+}
+
+function itemId(item: unknown, field: string | undefined, index: number): string {
+	if (typeof item === "string" || typeof item === "number") return String(item);
+	const o = (item ?? {}) as Record<string, unknown>;
+	const v = (field ? o[field] : undefined) ?? o.id ?? o.name ?? index;
+	return String(v);
+}
+
+/** Render a decide question: templates in instructions/criteria, plus options generated from a list variable. */
+export function buildQuestion(q: DecideQuestion, vars: Vars): Question {
+	const { optionsFrom, optionId, optionText, ...rest } = q;
+	const rendered = renderDeep(rest, vars) as Question;
+	if (!optionsFrom || rendered.type !== "choice") return rendered;
+	const list = getPath(vars, optionsFrom);
+	if (!Array.isArray(list)) throw new Error(`optionsFrom "${optionsFrom}" is not a list (got ${list === undefined ? "nothing" : typeof list})`);
+	const generated: Record<string, unknown> = {};
+	list.slice(0, 250).forEach((item, idx) => {
+		const o = (typeof item === "object" && item ? item : {}) as Record<string, unknown>;
+		generated[itemId(item, optionId, idx)] = optionText ? render(optionText, { ...vars, item }) : (o.description ?? (typeof item === "string" ? item : JSON.stringify(item)));
+	});
+	if (Object.keys(generated).length === 0 && !Object.keys(rendered.criteria ?? {}).length) throw new Error(`optionsFrom "${optionsFrom}" is empty and there are no static options`);
+	return { ...rendered, criteria: { ...generated, ...((rendered.criteria as Record<string, unknown>) ?? {}) } } as Question;
+}
+
+function answerValue(a: { type: string; noul?: number; score?: number; confidence?: number }): number {
+	return a.type === "noul" ? (a.noul ?? 0) : a.type === "score" ? (a.score ?? 0) : (a.confidence ?? 0);
+}
+
+export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: WorkflowHooks, resume?: RunCheckpoint): Promise<{ status: "succeeded" | "failed"; output?: string; vars: Vars; error?: string }> {
+	const vars: Vars = resume ? { ...initialVars, ...resume.vars } : { ...initialVars };
+	const cost: RunCost = hooks.cost ?? emptyCost();
+	const completed: string[] = resume ? [...resume.completed] : [];
 	const ids = steps.map((s, i) => s.id ?? `step${i + 1}`);
 	loadDotEnv(hooks.cwd); // the agent's project .env (and ~/.reflex/.env) may hold TYPESAFE_API_KEY
 	const keys = createKeyResolver(piStoredApiKey);
-	const jev = createJevClient(loadReflexConfig(), keys, { timeoutMs: 12000 })?.client;
-	let i = 0;
-	let guard = 0;
-	let lastOutput: string | undefined;
+	const jev = (hooks.jev as { systemOne: (req: unknown) => Promise<{ answers: Record<string, unknown>; usage?: { input_tokens?: number; cost?: number }; latencyMs: number }> } | undefined) ?? createJevClient(loadReflexConfig(), keys, { timeoutMs: 12000 })?.client;
+	let i = resume ? resume.nextIndex : 0;
+	let lastOutput: string | undefined = resume?.lastOutput;
+	const saveProgress = (finishedId: string) => {
+		completed.push(finishedId);
+		hooks.checkpoint?.({ nextIndex: i, completed: [...completed], vars, lastOutput, savedAt: Date.now() });
+	};
 	while (i >= 0 && i < steps.length) {
-		if (++guard > 200) return { status: "failed", vars, error: "workflow exceeded 200 step executions (loop?)" };
-		if (hooks.signal?.aborted) return { status: "failed", vars, error: "cancelled" };
+		if (hooks.signal?.aborted) return { status: "failed", vars, output: lastOutput, error: "cancelled" };
+		const over = budgetExceeded(cost, hooks.limits, steps[i].type);
+		if (over) return { status: "failed", vars, output: lastOutput, error: `budget: ${over} before step "${ids[i]}"` };
+		cost.steps++;
 		const step = steps[i];
 		const id = ids[i];
 		const as = step.as ?? id;
@@ -176,7 +271,12 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					const cmd = render(step.run, vars);
 					hooks.emit({ type: "step_start", index: i, id, stepType: "shell", summary: cmd.slice(0, 200) });
 					const r = await sh(cmd, step.cwd ? render(step.cwd, vars) : hooks.cwd, (step.timeoutSec ?? 300) * 1000, hooks.signal);
-					vars[as] = r;
+					// A command that prints JSON makes it available as `<as>.json` (lists feed optionsFrom / forEach).
+					let parsed: unknown;
+					try {
+						parsed = JSON.parse(r.stdout);
+					} catch {}
+					vars[as] = parsed === undefined ? r : { ...r, json: parsed };
 					lastOutput = r.stdout.trim() || lastOutput;
 					if (!r.ok && !step.allowFailure && !step.route?.length) {
 						emitEnd(false, r);
@@ -185,23 +285,80 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					const next = pickNext(step, vars);
 					emitEnd(r.ok, { exitCode: r.exitCode, stdout: r.stdout.slice(0, 2000), stderr: r.stderr.slice(0, 500) }, next);
 					i = advance(ids, i, next);
+					saveProgress(id);
 					break;
 				}
 				case "decide": {
 					if (!jev) throw new Error("decide step needs Jev: set TYPESAFE_API_KEY or OPENROUTER_API_KEY");
 					const state = renderDeep(step.state, vars) as string | Record<string, unknown>;
-					hooks.emit({ type: "step_start", index: i, id, stepType: "decide", summary: Object.keys(step.questions).join(", ") });
-					const res = await jev.systemOne({ purpose: `workflow:${step.id}`, state, questions: step.questions, signal: hooks.signal });
-					vars[as] = res.answers;
+					// Questions are rebuilt from the current variables on every execution: the menu is never stale.
+					const questions: Record<string, Question> = {};
+					for (const [qid, q] of Object.entries(step.questions ?? {})) questions[qid] = buildQuestion(q, vars);
+					let items: unknown[] = [];
+					const itemKeys: string[] = [];
+					if (step.forEach) {
+						const list = getPath(vars, step.forEach.from);
+						if (!Array.isArray(list)) throw new Error(`forEach.from "${step.forEach.from}" is not a list`);
+						items = list.slice(0, FOREACH_MAX);
+						items.forEach((item, idx) => itemKeys.push(`item_${idx}`));
+					}
+					if (!Object.keys(questions).length && !items.length) throw new Error("decide step has no questions (and forEach found no items)");
+					hooks.emit({ type: "step_start", index: i, id, stepType: "decide", summary: [...Object.keys(questions), ...(items.length ? [`forEach ${step.forEach!.from} × ${items.length}`] : [])].join(", ") });
+
+					// One request for the fixed questions, plus batches for the per-item questions; all in flight together.
+					const calls: Array<Promise<{ answers: Record<string, unknown>; usage?: { input_tokens?: number; cost?: number }; latencyMs: number }>> = [];
+					if (Object.keys(questions).length) calls.push(jev.systemOne({ purpose: `workflow:${id}`, state, questions, signal: hooks.signal }) as never);
+					for (let b = 0; b < items.length; b += FOREACH_BATCH) {
+						const batch: Record<string, Question> = {};
+						for (let k = b; k < Math.min(b + FOREACH_BATCH, items.length); k++) {
+							// Jev never sees question ids, and questions cannot read each other: every generated
+							// question carries the one item it judges inside its own instructions.
+							const q = renderDeep(step.forEach!.question, { ...vars, item: items[k] }) as Question;
+							batch[itemKeys[k]] = { ...q, instructions: { question: q.instructions, judge_only_this_item: items[k] } } as Question;
+						}
+						calls.push(jev.systemOne({ purpose: `workflow:${id}:each`, state, questions: batch, signal: hooks.signal }) as never);
+					}
+					const results = await Promise.all(calls);
+					const answers: Record<string, unknown> = {};
+					let latencyMs = 0;
+					for (const r of results) {
+						Object.assign(answers, r.answers);
+						latencyMs = Math.max(latencyMs, r.latencyMs);
+						cost.jevCalls++;
+						cost.jevTokens += r.usage?.input_tokens ?? 0;
+						cost.jevUsd += r.usage?.cost ?? (r.usage?.input_tokens ?? 0) * JEV_USD_PER_TOKEN;
+					}
+					cost.totalUsd = cost.jevUsd + cost.llmUsd;
+
+					const result: Record<string, unknown> = {};
+					for (const qid of Object.keys(questions)) result[qid] = answers[qid];
+					if (items.length) {
+						const ranked = items
+							.map((item, idx) => {
+								const a = answers[itemKeys[idx]] as { type: string; noul?: number; score?: number; confidence?: number; choice?: string };
+								return { id: itemId(item, step.forEach!.id, idx), value: a ? answerValue(a) : 0, confidence: a?.confidence, choice: a?.choice, item };
+							})
+							.sort((x, y) => y.value - x.value);
+						const kept = ranked.filter((r) => step.forEach!.min === undefined || r.value >= step.forEach!.min);
+						result.ranked = ranked;
+						result.shortlist = kept.slice(0, step.forEach!.top ?? kept.length).map((r) => r.item);
+						result.count = kept.length;
+					}
+					vars[as] = result;
 					const next = pickNext(step, vars);
-					emitEnd(true, { answers: res.answers, latencyMs: Math.round(res.latencyMs) }, next);
+					emitEnd(true, { answers: Object.fromEntries(Object.keys(questions).map((q) => [q, answers[q]])), ...(items.length ? { ranked: (result.ranked as Array<{ id: string; value: number }>).slice(0, 10).map((r) => ({ id: r.id, value: Number(r.value.toFixed(3)) })), shortlisted: (result.shortlist as unknown[]).length, of: items.length } : {}), requests: results.length, latencyMs: Math.round(latencyMs), costUsd: Number(cost.jevUsd.toFixed(6)) }, next);
 					i = advance(ids, i, next);
+					saveProgress(id);
 					break;
 				}
 				case "llm": {
 					const prompt = render(step.prompt, vars);
 					hooks.emit({ type: "step_start", index: i, id, stepType: "llm", summary: prompt.slice(0, 200) });
 					const r = await hooks.runLlm(step, prompt, step.instructions ? render(step.instructions, vars) : undefined);
+					cost.llmRuns++;
+					cost.llmTokens += r.tokens ?? 0;
+					cost.llmUsd += r.costUsd ?? 0;
+					cost.totalUsd = cost.jevUsd + cost.llmUsd;
 					vars[as] = r;
 					if (r.output) lastOutput = r.output;
 					const ok = r.status === "succeeded";
@@ -209,6 +366,7 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					emitEnd(ok, { status: r.status, output: (r.output ?? "").slice(0, 2000), toolCalls: r.toolCalls, reflexBlocks: r.reflexBlocks, error: r.error }, next);
 					if (!ok && !step.route?.length) return { status: "failed", vars, output: lastOutput, error: `${id}: ${r.error ?? r.status}` };
 					i = advance(ids, i, next);
+					saveProgress(id);
 					break;
 				}
 				case "call": {
@@ -220,6 +378,7 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					const next = pickNext(step, vars);
 					emitEnd(r.status === "succeeded", r, next);
 					i = advance(ids, i, next);
+					saveProgress(id);
 					break;
 				}
 				case "end": {

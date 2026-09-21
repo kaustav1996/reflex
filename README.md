@@ -162,6 +162,17 @@ There are also `call` steps for another agent and `end` steps. Routing is data
 (`route: [{ "when": "verdict.failed.noul >= 0.6", "next": "fix" }]`), and each step's result is a
 variable that later steps can use.
 
+A `decide` step rebuilds its questions every time it runs. Instructions and options are
+templates, a choice can take its options from a list variable (`optionsFrom`), and `forEach`
+scores every item of a list in parallel and returns a ranked shortlist, which is the "filter in
+code, score the rest, choose among the shortlist" pattern. Routes can test an answer's
+confidence, so an unsure decision goes to a review step.
+
+Runs have hard stops. `limits` caps spend, TypeSafe calls, LLM runs and steps for one run, and the
+run record carries what it cost. Progress is saved after every completed step, so
+`reflex agent resume <agent> <run>` continues an interrupted run without repeating finished
+steps. Webhook senders can pass an idempotency key so a retry does not start a second run.
+
 Every agent has a workflow diagram in the Agents tab. It shows the triggers, each step coloured
 by kind, the routes that TypeSafe answers decide in pink, and any chained agents. Nodes light up
 as a run executes, and `reflex agent diagram <id>` prints the same graph as Mermaid. You can ask

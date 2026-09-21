@@ -134,6 +134,80 @@ steps' `run`, `state`, `prompt`.
 ]
 ```
 
+### Decide steps that lead somewhere
+
+Jev never sees a question's id, so put the requirement in `instructions` and describe every
+option in `criteria`. Give it evidence in the `state` (findings, sources, remaining gaps), in
+fields separate from the original request. Questions that read the same state go in ONE decide
+step: they are answered in parallel and cannot see each other's answers, so anything that needs a
+fresh result belongs after the step that produces it.
+
+**Route to review when Jev is unsure.** A choice answer has `choice` and `confidence`; a score has
+`score` and `confidence`; a noul is a probability where ~0.5 means "don't know". Confidence is not
+accuracy, so start strict and tune on real runs:
+
+```json
+"route": [
+  { "when": "next.worker.confidence < 0.85", "next": "review" },
+  { "when": "next.worker.choice == research", "next": "research" },
+  { "when": "next.worker.choice == write", "next": "write" },
+  { "when": "default", "next": "review" }
+]
+```
+
+**Rebuild the menu every time.** Options must reflect what exists now, not what existed when the
+agent was written. A `shell` step that prints JSON exposes it as `<id>.json`; a choice can build
+its options from that list on every execution (static `criteria` stay as escapes):
+
+```json
+{ "id": "workers", "type": "shell", "run": "cat workers.json" },
+{ "id": "next", "type": "decide", "state": { "goal": "{{input}}", "done_so_far": "{{notes.stdout}}" },
+  "questions": { "worker": { "type": "choice", "instructions": "Which available worker should act next?",
+    "optionsFrom": "workers.json", "optionId": "name", "optionText": "{{item.description}}",
+    "criteria": { "review": "The request is unclear, out of scope, or the work is complete." } } } }
+```
+
+`instructions` and `criteria` are templates too (`{{var.path}}`).
+
+**Big candidate lists: filter in code, score the rest, choose among the shortlist.** `forEach`
+asks one question about every item of a list in parallel batches and ranks the answers. The step
+result has `ranked` (best first, each with `id`, `value`, `confidence`, `item`), `shortlist`
+(the kept items) and `count`; a later choice can use `optionsFrom: "<id>.shortlist"`.
+
+```json
+{ "id": "fetch", "type": "shell", "run": "jq '[.[] | select(.year >= 2026)]' papers.json" },
+{ "id": "rank", "type": "decide", "state": { "goal": "{{input}}" },
+  "forEach": { "from": "fetch.json", "id": "title", "top": 5, "min": 1.2,
+    "question": { "type": "score", "instructions": "How relevant is this paper to the goal?",
+      "criteria": ["unrelated", "partially relevant", "directly addresses the goal"] } },
+  "route": [ { "when": "rank.count < 1", "next": "nothing" }, { "when": "default", "next": "write" } ] }
+```
+
+### Limits, stopping points and resuming
+
+Every agent that runs unattended gets `limits`; a run that would cross one ends as failed with a
+`budget:` error, and its cost so far is on the run record.
+
+```json
+"limits": { "maxCostUsd": 0.25, "maxJevCalls": 50, "maxLlmRuns": 2, "maxSteps": 40 }
+```
+
+- Put a stopping point before anything irreversible: draft and save, then end at review.
+  Publishing, sending and deploying need their own approval step; headless runs block what the
+  reflex gate would ask about.
+- A confident answer does not prove that a file was saved or a message was sent. After an `llm`
+  or side-effecting step, verify with a `shell` step (the file exists, the test passes, the API
+  returns the new state) before routing to `end`.
+- Progress is saved after every completed step. `reflex agent resume <agent> <run>` (or the resume
+  button) continues a failed, timed-out or cancelled run at the next step with its variables
+  restored; completed steps are not repeated. A step that was interrupted mid-way runs again, so
+  make side-effecting steps check before they act.
+- Senders that retry should pass an idempotency key to the webhook (`Idempotency-Key` header,
+  `?key=`, or `idempotency_key` in the JSON body): the same key returns the existing run instead
+  of starting another. Cron triggers are keyed per minute automatically.
+- Judge an agent by cost per completed task (`reflex agent runs <id>` shows `$` per run), not per
+  call: a cheap decision that sends a worker down the wrong branch costs more than it saved.
+
 ### The diagram
 
 Every agent has a workflow diagram in the Agents tab (and `reflex agent diagram <id>` prints it

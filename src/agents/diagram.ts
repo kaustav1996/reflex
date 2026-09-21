@@ -53,7 +53,10 @@ function stepNode(s: NamedStep, agent: AgentDefinition): DiagramNode {
 			return { id: s.id, kind: "shell", label: s.id, detail: clip(s.run.replace(/\s+/g, " "), 70) };
 		case "decide": {
 			const qs = Object.entries(s.questions ?? {}).map(([k, q]) => `${k}:${(q as { type: string }).type}`);
-			return { id: s.id, kind: "decide", label: s.id, detail: clip(qs.join(" · "), 70) };
+			const badges: string[] = [];
+			for (const q of Object.values(s.questions ?? {})) if ((q as { optionsFrom?: string }).optionsFrom) badges.push(`options rebuilt from ${(q as { optionsFrom?: string }).optionsFrom}`);
+			if (s.forEach) badges.push(`scores each of ${s.forEach.from}${s.forEach.top ? ` → top ${s.forEach.top}` : ""}`);
+			return { id: s.id, kind: "decide", label: s.id, detail: clip([...qs, ...(s.forEach ? [`each:${s.forEach.question.type}`] : [])].join(" · "), 70), badges: badges.length ? badges : undefined };
 		}
 		case "llm":
 			return { id: s.id, kind: "llm", label: s.id, detail: clip((s.prompt ?? "").replace(/\s+/g, " "), 70), badges: [`⚡ TypeSafe gate (${agent.reflex ?? "balanced"})`, ...(s.tools?.length ? [`tools: ${s.tools.join(",")}`] : [])] };

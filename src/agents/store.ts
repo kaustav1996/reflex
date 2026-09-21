@@ -60,9 +60,47 @@ export interface AgentDefinition {
 	triggers: Trigger[];
 	chain?: ChainStep[];
 	timeoutMinutes?: number;
+	/** Hard stops for one run. A run that would cross one ends as failed with a `budget:` error. */
+	limits?: RunLimits;
 	enabled: boolean;
 	createdAt: number;
 	updatedAt: number;
+}
+
+export interface RunLimits {
+	/** Step executions in a workflow run (default 200). */
+	maxSteps?: number;
+	/** TypeSafe (Jev) requests in one run. */
+	maxJevCalls?: number;
+	/** LLM sessions started in one run. */
+	maxLlmRuns?: number;
+	/** Total spend (Jev + LLM) in USD for one run. */
+	maxCostUsd?: number;
+}
+
+/** What a run has consumed so far. Jev cost is reported by OpenRouter, or estimated from input tokens on TypeSafe. */
+export interface RunCost {
+	steps: number;
+	jevCalls: number;
+	jevTokens: number;
+	jevUsd: number;
+	llmRuns: number;
+	llmTokens: number;
+	llmUsd: number;
+	totalUsd: number;
+}
+
+export const emptyCost = (): RunCost => ({ steps: 0, jevCalls: 0, jevTokens: 0, jevUsd: 0, llmRuns: 0, llmTokens: 0, llmUsd: 0, totalUsd: 0 });
+
+/** Saved after every completed workflow step, so an interrupted run can continue instead of starting over. */
+export interface RunCheckpoint {
+	/** Index of the next step to execute. */
+	nextIndex: number;
+	/** Ids of the steps that completed, in order. */
+	completed: string[];
+	vars: Record<string, unknown>;
+	lastOutput?: string;
+	savedAt: number;
 }
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timeout" | "cancelled";
@@ -81,6 +119,12 @@ export interface AgentRun {
 	toolCalls: number;
 	reflexBlocks: number;
 	pid?: number;
+	/** Spend and call counts for this run. */
+	cost?: RunCost;
+	/** A trigger may carry a key; a second trigger with the same key returns this run instead of starting another. */
+	idempotencyKey?: string;
+	/** How many times this run was continued from its checkpoint. */
+	resumes?: number;
 }
 
 export function agentsDir(): string {
@@ -185,6 +229,30 @@ export function loadRun(agentId: string, runId: string): AgentRun | undefined {
 export function saveRun(run: AgentRun): void {
 	mkdirSync(agentRunsDir(run.agentId), { recursive: true });
 	writeFileSync(join(agentRunsDir(run.agentId), `${run.id}.json`), `${JSON.stringify(run, null, 2)}\n`);
+}
+
+function checkpointPath(agentId: string, runId: string): string {
+	return join(agentRunsDir(agentId), `${runId}.state.json`);
+}
+
+export function saveCheckpoint(run: AgentRun, cp: RunCheckpoint): void {
+	try {
+		mkdirSync(agentRunsDir(run.agentId), { recursive: true });
+		writeFileSync(checkpointPath(run.agentId, run.id), `${JSON.stringify(cp)}\n`);
+	} catch {}
+}
+
+export function loadCheckpoint(agentId: string, runId: string): RunCheckpoint | undefined {
+	try {
+		return JSON.parse(readFileSync(checkpointPath(agentId, runId), "utf8")) as RunCheckpoint;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The run a trigger with this key already produced (queued, running or succeeded); failed runs do not block a retry. */
+export function findRunByKey(agentId: string, key: string): AgentRun | undefined {
+	return listRuns(agentId, 200).find((r) => r.idempotencyKey === key && (r.status === "queued" || r.status === "running" || r.status === "succeeded"));
 }
 
 /** Path of the run's event log (JSONL of Pi events) for later viewing. */

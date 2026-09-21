@@ -28,9 +28,9 @@ import { piStoredApiKey } from "../extensions/typesafe/state.js";
 import { transcribe } from "../extensions/voice/providers.js";
 import { convertToWav } from "./audio.js";
 import { describeCron, parseCron } from "../agents/cron.js";
-import { attachRunListener, cancelRun, getLiveRun, liveRunsForAgent, runAgent } from "../agents/runner.js";
+import { attachRunListener, cancelRun, getLiveRun, liveRunsForAgent, resumeRun, runAgent } from "../agents/runner.js";
 import { startScheduler } from "../agents/scheduler.js";
-import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listRuns, loadAgent, loadRun, runLogPath, saveAgent } from "../agents/store.js";
+import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listRuns, loadAgent, loadRun, runLogPath, saveAgent, findRunByKey, loadCheckpoint } from "../agents/store.js";
 import { getReflexHome, loadReflexConfig as loadCfg, saveReflexConfig, SERVICE_ENV, storeKey } from "../config.js";
 import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/client.js";
 import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
@@ -297,11 +297,16 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				if (!agent.enabled) return json(res, 409, { error: "agent disabled" });
 				const raw = (await readBody(req, 2 * 1024 * 1024)).toString("utf8");
 				let input = raw;
+				// A sender that retries can pass a key (header, ?key=, or body.idempotency_key): the same key never starts a second run.
+				let key = String(req.headers["idempotency-key"] ?? url.searchParams.get("key") ?? "").trim() || undefined;
 				try {
-					const parsed = JSON.parse(raw) as { input?: unknown };
+					const parsed = JSON.parse(raw) as { input?: unknown; idempotency_key?: unknown };
+					if (!key && typeof parsed?.idempotency_key === "string") key = parsed.idempotency_key.trim() || undefined;
 					input = typeof parsed?.input === "string" ? parsed.input : JSON.stringify(parsed, null, 2);
 				} catch {}
-				void runAgent(agent, { type: "webhook" }, input);
+				const existing = key ? findRunByKey(agent.id, `hook:${key}`) : undefined;
+				if (existing) return json(res, 200, { ok: true, agent: agent.id, runId: existing.id, duplicate: true, status: existing.status });
+				void runAgent(agent, { type: "webhook" }, input, undefined, { idempotencyKey: key ? `hook:${key}` : undefined });
 				const id = await new Promise<string>((r) => setTimeout(() => r(listRuns(agent.id, 1)[0]?.id ?? ""), 150));
 				return json(res, 202, { ok: true, agent: agent.id, runId: id });
 			}
@@ -505,7 +510,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				if (!agent) return json(res, 404, { error: "no such agent" });
 				if (!am[2] && req.method === "GET") {
 					const diagram = agentDiagram(agent);
-					return json(res, 200, { agent, runs: listRuns(agent.id, 100), live: liveRunsForAgent(agent.id).map((r) => r.id), diagram, mermaid: toMermaid(diagram) });
+					return json(res, 200, { agent, runs: listRuns(agent.id, 100).map((r) => ({ ...r, resumable: !!agent.steps?.length && r.status !== "succeeded" && r.status !== "running" && r.status !== "queued" && !!loadCheckpoint(agent.id, r.id) })), live: liveRunsForAgent(agent.id).map((r) => r.id), diagram, mermaid: toMermaid(diagram) });
 				}
 				if (!am[2] && req.method === "DELETE") {
 					for (const r of liveRunsForAgent(agent.id)) cancelRun(r.id);
@@ -522,12 +527,23 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				}
 				if (am[2] === "runs" && req.method === "GET") return json(res, 200, { runs: listRuns(agent.id, 100) });
 			}
-			const rm = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)\/runs\/([A-Za-z0-9-]+)(?:\/(events|cancel))?$/);
+			const rm = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)\/runs\/([A-Za-z0-9-]+)(?:\/(events|cancel|resume))?$/);
 			if (rm) {
 				const agentId = rm[1];
 				const runRec = loadRun(agentId, rm[2]);
 				if (!runRec) return json(res, 404, { error: "no such run" });
 				if (rm[3] === "cancel" && req.method === "POST") return json(res, 200, { ok: cancelRun(runRec.id) });
+				if (rm[3] === "resume" && req.method === "POST") {
+					const ag = loadAgent(agentId);
+					if (!ag) return json(res, 404, { error: "no such agent" });
+					try {
+						void resumeRun(ag, runRec.id).catch(() => {});
+						return json(res, 202, { ok: true, runId: runRec.id, from: loadCheckpoint(agentId, runRec.id)?.completed ?? [] });
+					} catch (err) {
+						return json(res, 409, { error: err instanceof Error ? err.message : String(err) });
+					}
+				}
+				if (!rm[3] && req.method === "GET") return json(res, 200, { run: runRec, live: !!getLiveRun(runRec.id), checkpoint: (() => { const cp = loadCheckpoint(agentId, runRec.id); return cp ? { completed: cp.completed, nextIndex: cp.nextIndex, savedAt: cp.savedAt } : null; })() });
 				if (rm[3] === "events" && req.method === "GET") {
 					res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
 					const log = runLogPath(runRec);
@@ -548,7 +564,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					}
 					return;
 				}
-				if (!rm[3] && req.method === "GET") return json(res, 200, { run: runRec, live: !!getLiveRun(runRec.id) });
+
 			}
 
 			// ── Settings ─────────────────────────────────────────────────────
