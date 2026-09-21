@@ -6,10 +6,32 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { choice, isValidChoice } from "./client.js";
+import { choice, isValidChoice, type ChoiceAnswer } from "./client.js";
 import { clip } from "./context.js";
 import type { ReflexState } from "./state.js";
 import { loadMcpConfig } from "../mcp/client.js";
+
+export const MIN_HINT_PROBABILITY = 0.5;
+
+export function hintsFrom(
+	answers: { skill?: ChoiceAnswer; connector?: ChoiceAnswer },
+	skillNames: string[],
+	serverNames: string[],
+	min = MIN_HINT_PROBABILITY,
+): string[] {
+	const hints: string[] = [];
+	const skillIds = ["none", ...skillNames];
+	const serverIds = ["none", ...serverNames];
+	const skillAns = answers.skill;
+	if (skillAns && isValidChoice(skillAns, skillIds) && skillAns.choice !== "none" && skillAns.probabilities[skillAns.choice] >= min) {
+		hints.push(`skill "${skillAns.choice}" (${pct(skillAns.probabilities[skillAns.choice])}) — read its SKILL.md before starting`);
+	}
+	const connAns = answers.connector;
+	if (connAns && isValidChoice(connAns, serverIds) && connAns.choice !== "none" && connAns.probabilities[connAns.choice] >= min) {
+		hints.push(`connector "${connAns.choice}" (${pct(connAns.probabilities[connAns.choice])}) — its tools are named ${connAns.choice}__*`);
+	}
+	return hints;
+}
 
 export function registerSelector(pi: ExtensionAPI, state: ReflexState): void {
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -31,11 +53,16 @@ export function registerSelector(pi: ExtensionAPI, state: ReflexState): void {
 		if (servers.length) questions.connector = choice({ question: "Which external connector (MCP server) does request need? Pick none when local files and the shell are enough.", inspect: "request" }, serverCriteria);
 		try {
 			const res = await state.client.systemOne({ purpose: "select", state: { request: clip(prompt, 1500), recent_context: clip(ctx.getSystemPrompt().slice(-400), 400) }, questions, timeoutMs: 2500 });
-			const hints: string[] = [];
 			const skillAns = res.answers.skill;
-			if (skillAns && isValidChoice(skillAns, Object.keys(skillCriteria)) && skillAns.choice !== "none" && skillAns.probabilities[skillAns.choice] >= 0.3) hints.push(`skill "${skillAns.choice}" (${pct(skillAns.probabilities[skillAns.choice])}) — read its SKILL.md before starting`);
 			const connAns = res.answers.connector;
-			if (connAns && isValidChoice(connAns, Object.keys(serverCriteria)) && connAns.choice !== "none" && connAns.probabilities[connAns.choice] >= 0.3) hints.push(`connector "${connAns.choice}" (${pct(connAns.probabilities[connAns.choice])}) — its tools are named ${connAns.choice}__*`);
+			const hints = hintsFrom(
+				{
+					skill: skillAns as ChoiceAnswer | undefined,
+					connector: connAns as ChoiceAnswer | undefined,
+				},
+				skills.map((sk) => sk.name).slice(0, 250),
+				servers.map((server) => server.name).slice(0, 250),
+			);
 			state.record("select", hints.length ? hints.join(" · ") : `none relevant (skill ${skillAns ? `${skillAns.choice} ${pct(skillAns.confidence)}` : "-"}, connector ${connAns ? `${connAns.choice} ${pct(connAns.confidence)}` : "-"})`);
 			if (!hints.length) return undefined;
 			return { message: { customType: "reflex-relevance", content: `<relevance source="typesafe-jev">Likely relevant for this request: ${hints.join("; ")}.</relevance>`, display: true } };
