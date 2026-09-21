@@ -20,6 +20,16 @@
     --paper: #1e1e1e; --ink: #fefefe; --ink-soft: #fefefedb; --line: #fefefe; --light: #3a3a3a;
     --user-bg: #2a2a2a; --tool-bg: #262626; --tool-ok: #22302a; --tool-err: #3a2626; --reflex-bg: #3a2a31; --gray: #9a9a9a;
   }
+  :root[data-theme="wafer"] {
+    --paper: #0a0a0a; --ink: #f5f5f5; --ink-soft: #f5f5f5db; --line: #3a3a3a; --light: #1a1a1a;
+    --pink: #95aba7; --magenta: #59f2bd; --teal: #0a9f72; --green: #59f2bd; --mist: #97acaa; --gray: #808080;
+    --user-bg: #101010; --tool-bg: #121212; --tool-ok: #0d2018; --tool-err: #2a1212; --reflex-bg: #15201c;
+  }
+  :root[data-theme="wafer-light"] {
+    --paper: #f3f3f3; --ink: #0a0a0a; --ink-soft: #0a0a0adb; --line: #272727; --light: #e3e3e3;
+    --pink: #5a7a74; --magenta: #0a9f72; --teal: #0a9f72; --green: #0a9f72; --mist: #6b7f7c; --gray: #676767;
+    --user-bg: #ffffff; --tool-bg: #f9f9f9; --tool-ok: #e6f5ec; --tool-err: #fbe6e6; --reflex-bg: #e8f0ee;
+  }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body { background: var(--paper); color: var(--ink); font: 13px/1.5 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -724,8 +734,19 @@ $("#input").addEventListener("keydown", e => {
 $("#newBtn").onclick = () => { if (state.tab === "agents") { state.agent = null; state.editing = true; renderAgent(); $("#title").textContent = "new agent"; } else if (state.tab === "artifacts") newArtifact(); else newSession(); };
 $("#abortBtn").onclick = () => rpc({ type: "abort" });
 $("#modelBtn").onclick = () => rpc({ type: "get_available_models" });
-$("#themeBtn").onclick = () => { const r = document.documentElement; const cur = r.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); r.dataset.theme = cur === "dark" ? "light" : "dark"; try { localStorage.setItem("reflex-theme", r.dataset.theme); } catch {} };
-try { const t = localStorage.getItem("reflex-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+function applyWebTheme(t) {
+  const r = document.documentElement;
+  if (!t || t === "system") { delete r.dataset.theme; try { localStorage.removeItem("reflex-theme"); } catch {} return; }
+  r.dataset.theme = t; try { localStorage.setItem("reflex-theme", t); } catch {}
+}
+$("#themeBtn").onclick = () => {
+  const r = document.documentElement;
+  const cur = r.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "wafer" ? "wafer-light" : cur === "wafer-light" ? "wafer" : cur === "dark" ? "light" : "dark";
+  applyWebTheme(next);
+  const sel = document.getElementById("webTheme"); if (sel) sel.value = next;
+};
+try { const t = localStorage.getItem("reflex-theme"); if (t) applyWebTheme(t); } catch {}
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#overlay").classList.contains("show")) rpc({ type: "abort" }); });
 
 let rec = null, chunks = [];
@@ -977,7 +998,7 @@ async function loadSettings() {
       <label>protected paths</label><input data-cfg="reflex.protectedPaths" value="${esc(c.reflex.protectedPaths.join(", "))}"></div></div>
     <div class="card" id="s-voice"><h3>Voice</h3><div class="form">${keyRow("sarvam", "Sarvam key")}${keyRow("deepgram", "Deepgram key")}<label>OpenAI / Groq</label><div class="muted" style="padding-top:6px">OpenAI ${d.keys.openai ? "✓ " + esc(d.keys.openai) : "not set"} · Groq ${d.keys.groq ? "✓ " + esc(d.keys.groq) : "not set"} · voice reuses the keys from System 2 · LLM</div><label>provider</label>${opt("voice.provider", c.voice.provider, ["sarvam", "openai", "groq", "deepgram", "whisper-cpp", "none"])}<label>language</label><input data-cfg="voice.language" value="${esc(c.voice.language)}" placeholder="unknown · en-IN · hi-IN"><label>translate to English</label>${opt("voice.translateToEnglish", c.voice.translateToEnglish, [false, true])}<label>shortcut (TUI)</label><input data-cfg="voice.shortcut" value="${esc(c.voice.shortcut)}"></div></div>
     <div class="card" id="s-browser"><h3>Browser agent</h3><div class="form"><label>headless</label>${opt("browser.headless", c.browser.headless, [false, true])}<label>attach to Chrome</label><input data-cfg="browser.attachUrl" value="${esc(c.browser.attachUrl || "")}" placeholder="http://127.0.0.1:9222 (your own Chrome with --remote-debugging-port)"><label>text model</label><input data-cfg="browser.textModel" value="${esc(c.browser.textModel || "")}" placeholder="default: session model"><label>max steps</label><input data-cfg="browser.maxSteps" type="number" value="${c.browser.maxSteps}" style="width:90px"></div></div>
-    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light"])}</div><div class="hint">The default model moved to System 2 · LLM.</div></div>
+    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>Web theme</label><div><select id="webTheme">${[["system","System (light/dark)"],["light","Light"],["dark","Dark"],["wafer","Wafer"],["wafer-light","Wafer light"]].map(([v,l]) => `<option value="${v}" ${(document.documentElement.dataset.theme || "system") === v ? "selected" : ""}>${l}</option>`).join("")}</select><div class="muted">Browser-only. Saved in localStorage; ◐ still flips light↔dark or Wafer↔Wafer light.</div></div><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light", "wafer", "wafer-light"])}</div><div class="hint">TUI themes install into ~/.reflex/agent/themes. The default model moved to System 2 · LLM.</div></div>
     <div class="rowbtns" id="sSaveRow"><button class="b primary" id="sSave">save settings</button><span class="hint" id="sMsg">new terminal sessions pick these up; web sessions after a new tab</span></div>
     <div class="card" id="s-llm"><h3>System 2 · sign-in and endpoints</h3><div id="llmBody"></div></div>
     <div class="card" id="s-default"><h3>System 2 · default model</h3><div class="hint">The model and thinking effort new sessions start with. The list only has models your keys, sign-ins and endpoints can use right now.</div><div id="defaultBody"><span class="hint">loading models…</span></div></div>
@@ -1015,6 +1036,9 @@ async function loadSettings() {
     const server = cmd ? { command: cmd.split(/\s+/)[0], args: cmd.split(/\s+/).slice(1), env: kv } : { url, headers: kv }; return { name, server }; };
   $("#mTest").onclick = async () => { const out = $("#mOut"); out.style.display = ""; out.textContent = "connecting…"; try { const r = await api("/api/mcp/test", { method: "POST", body: JSON.stringify(mcpFromForm()), headers: { "Content-Type": "application/json" } }); out.textContent = `✓ ${r.server.name || ""} ${r.server.version || ""} · ${r.tools.length} tools\n` + r.tools.map(t => `  ${t.name} — ${t.description}`).join("\n"); } catch (e) { out.textContent = "✗ " + e.message; } };
   $("#mAdd").onclick = async () => { try { const { name, server } = mcpFromForm(); const servers = state.settings.mcp.servers || {}; servers[name] = { ...server, enabled: true }; await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers }), headers: { "Content-Type": "application/json" } }); state.settings.mcp.servers = servers; drawConnectors(); $("#mOut").style.display = ""; $("#mOut").textContent = `saved ${name}. New sessions get its tools; in an open session type /mcp.`; } catch (e) { $("#mOut").style.display = ""; $("#mOut").textContent = "✗ " + e.message; } };
+    const webTheme = $("#webTheme");
+  if (webTheme) webTheme.onchange = () => applyWebTheme(webTheme.value === "system" ? "system" : webTheme.value);
+
   $("#sSave").onclick = async () => {
     const keys = {}; document.querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
     const config = {}; document.querySelectorAll("[data-cfg]").forEach(i => { const path = i.dataset.cfg.split("."); let v = i.value; if (v === "true") v = true; else if (v === "false") v = false; else if (i.type === "number") v = Number(v); if (path.at(-1) === "protectedPaths") v = v.split(",").map(x => x.trim()).filter(Boolean); if (v === "") v = /^reflex\.routing/.test(i.dataset.cfg) ? null : undefined; /* an emptied tier must be cleared, not kept */ let o = config; for (const k of path.slice(0, -1)) o = o[k] ||= {}; o[path.at(-1)] = v; });
