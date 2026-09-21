@@ -34,16 +34,37 @@
   .logo { display: block; }
   .muted { color: var(--gray); font-size: 12px; }
   .sec { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--gray); margin: 8px 6px 2px; }
-  .sess.term .dot { background: var(--green); }
-  .sess .meta { font-size: 10px; color: var(--gray); margin-left: 4px; }
-  .sess.recent { color: var(--gray); }
-  .sess.recent:hover { color: var(--ink); }
+  .grp { margin-bottom: 8px; }
+  .grp-h { display: flex; align-items: center; gap: 6px; padding: 6px 6px 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--gray); cursor: pointer; user-select: none; }
+  .grp-h:hover { color: var(--ink); }
+  .grp-h .car { width: 10px; font-size: 9px; flex-shrink: 0; }
+  .grp-h .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grp-h .n { font-weight: 400; font-size: 10px; }
+  .grp-h .add { flex-shrink: 0; width: 18px; text-align: center; border: 1px solid transparent; font-size: 14px; line-height: 16px; }
+  .grp-h .add:hover { border-color: var(--line); background: var(--pink); color: #1e1e1e; }
+  .sess .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess .ago { font-size: 10px; color: var(--gray); flex-shrink: 0; }
+  .sess.active .ago { color: #1e1e1e; opacity: .7; }
+  .sess .acts { display: none; gap: 8px; flex-shrink: 0; }
+  .sess.web:hover .acts { display: inline-flex; }
+  .sess.web:hover .ago { display: none; }
+  .sess .acts span { opacity: .6; }
+  .sess .acts span:hover { opacity: 1; }
+  .sess.web .dot, .sess.term .dot { background: var(--green); }
+  .sess.term .dot { background: transparent; border: 2px solid var(--green); }
+  .sess.past .dot { background: transparent; border: 1px solid var(--gray); }
+  .sess.dead .dot { background: var(--mist); }
+  .sess.past { color: var(--gray); }
+  .sess.past:hover { color: var(--ink); }
+  .sess.untitled .t { font-style: italic; }
+  .more { font-size: 11px; color: var(--gray); padding: 3px 8px 3px 22px; cursor: pointer; }
+  .more:hover { color: var(--ink); text-decoration: underline; }
   .ro { font-size: 11px; color: var(--gray); padding: 6px 10px; border-top: 2px solid var(--line); }
   .titlebar .spacer { flex: 1; }
   .titlebar #title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 62%; }
   .titlebar .btn { background: var(--paper); border: 1px solid var(--line); padding: 0 6px; cursor: pointer; font: inherit; color: var(--ink); }
   .titlebar .btn:hover { background: var(--pink); color: #1e1e1e; }
-  #app { display: grid; grid-template-columns: 240px 1fr; grid-template-rows: 100%; height: 100%; gap: 16px; padding: 16px; }
+  #app { display: grid; grid-template-columns: 272px 1fr; grid-template-rows: 100%; height: 100%; gap: 16px; padding: 16px; }
   #app > * { min-width: 0; }
   .titlebar, .titlebar .tag { min-width: 0; }
   #side { display: flex; flex-direction: column; min-height: 0; }
@@ -51,9 +72,7 @@
   .sess { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid transparent; cursor: pointer; }
   .sess:hover { border-color: var(--line); }
   .sess.active { background: var(--pink); color: #1e1e1e; }
-  .sess .x { margin-left: auto; opacity: .6; }
-  .sess .x:hover { opacity: 1; }
-  .sess .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mist); }
+  .sess .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mist); flex-shrink: 0; box-sizing: border-box; }
   .sess.busy .dot { background: var(--pink); animation: blink 1s infinite; }
   @keyframes blink { 50% { opacity: .2; } }
   .side-foot { padding: 6px 8px; border-top: 2px solid var(--line); font-size: 11px; color: var(--gray); flex-shrink: 0; margin-top: auto; }
@@ -291,50 +310,76 @@ function md(text) {
 // ── sessions ────────────────────────────────────────────────────────────
 async function refreshSessions() {
   const data = await api("/api/sessions");
-  const hist = await api("/api/sessions/history");
   state.sessions = data.sessions; state.terminal = data.terminal || []; state.recent = data.recent || [];
-  state.history = hist.history || [];
-  const box = $("#sessions"); box.innerHTML = "";
-  const sec = (t) => { const d = document.createElement("div"); d.className = "sec"; d.textContent = t; box.appendChild(d); };
-  const short = (p) => p.replace("__REFLEX_HOME__", "~");
-  if (state.sessions.length) sec("Web sessions");
-  for (const s of state.sessions) {
-    const div = document.createElement("div");
-    div.className = "sess" + (state.current === "web:" + s.id ? " active" : "") + ((state.views["web:" + s.id]?.busy) ? " busy" : "");
-    div.innerHTML = `<span class="dot"></span><span>${esc(s.name)}</span><span class="x" title="close">✕</span>`;
-    div.title = s.cwd;
-    div.onclick = () => selectSession("web:" + s.id);
-    div.querySelector(".x").onclick = async (e) => { e.stopPropagation(); await api(`/api/sessions/${s.id}`, { method: "DELETE" }); delete state.views["web:" + s.id]; if (state.current === "web:" + s.id) state.current = null; refreshSessions(); render(); };
-    box.appendChild(div);
+  drawSidebar();
+}
+// Sidebar: conversations grouped by project, titled by what was asked in them.
+const sideUi = (() => { try { return { collapsed: {}, more: {}, ...JSON.parse(localStorage.getItem("reflex-side") || "{}") }; } catch (e) { return { collapsed: {}, more: {} }; } })();
+const saveSideUi = () => { try { localStorage.setItem("reflex-side", JSON.stringify(sideUi)); } catch (e) {} };
+const ago = t => { const m = Math.max(0, (Date.now() - t) / 60000); return m < 1 ? "now" : m < 60 ? `${m | 0}m` : m < 1440 ? `${m / 60 | 0}h` : m < 43200 ? `${m / 1440 | 0}d` : `${m / 43200 | 0}mo`; };
+const SIDE_ROWS = 5;
+let sideSig = "";
+async function resumeSession(path) {
+  try { const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sessionFile: path }), headers: { "Content-Type": "application/json" } }); await refreshSessions(); selectSession("web:" + s.id); }
+  catch (e) { await askText("Could not resume", "", e.message); }
+}
+async function startIn(cwd) {
+  try { const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ cwd }), headers: { "Content-Type": "application/json" } }); state.lastCwd = cwd; delete sideUi.collapsed[cwd]; saveSideUi(); await refreshSessions(); selectSession("web:" + s.id); $("#input").focus(); }
+  catch (e) { await askText("Could not create session", "", e.message); }
+}
+function drawSidebar(force) {
+  const rows = [
+    ...state.sessions.map(s => ({ key: "web:" + s.id, kind: "web", cwd: s.cwd, title: s.title, at: s.lastActive || s.createdAt, busy: !!(s.busy || state.views["web:" + s.id]?.busy), dead: !s.alive, tip: `${s.cwd}\n${s.alive ? "open here" : "ended"}${s.branch ? ` · ⎇ ${s.branch}` : ""}`, s })),
+    ...state.terminal.map(t => ({ key: "term:" + t.pid, kind: "term", cwd: t.cwd, title: t.title, at: t.startedAt || Date.now(), tip: `${t.cwd}\nopen in a terminal (pid ${t.pid})${t.model ? ` · ${t.model}` : ""}\nread-only here: type in that terminal` })),
+    ...state.recent.map(r => ({ key: "past:" + r.path, kind: "past", cwd: r.cwd, title: r.name, at: r.modified, tip: `${r.cwd}\n${new Date(r.modified).toLocaleString()} · ${r.messages} messages\nclick to continue it`, r })),
+  ];
+  const sig = JSON.stringify([rows.map(r => [r.key, r.title, r.busy, r.dead, ago(r.at)]), state.current, sideUi]);
+  if (!force && sig === sideSig) return; // the 5 s poll must not rebuild what did not change (hover and scroll stay put)
+  sideSig = sig;
+  const groups = new Map();
+  for (const r of rows) { if (!groups.has(r.cwd)) groups.set(r.cwd, []); groups.get(r.cwd).push(r); }
+  const live = r => r.kind !== "past";
+  const ordered = [...groups.entries()].map(([cwd, list]) => ({ cwd, list: list.sort((x, y) => (live(y) - live(x)) || (y.at - x.at)), at: Math.max(...list.map(r => r.at)) })).sort((x, y) => y.at - x.at);
+  const box = $("#sessions"), top = box.scrollTop; box.innerHTML = "";
+  for (const g of ordered) {
+    const closed = !!sideUi.collapsed[g.cwd] && !g.list.some(r => r.key === state.current);
+    const wrap = document.createElement("div"); wrap.className = "grp";
+    const head = document.createElement("div"); head.className = "grp-h"; head.title = g.cwd.replace("__REFLEX_HOME__", "~");
+    head.innerHTML = `<span class="car">${closed ? "▸" : "▾"}</span><span class="nm">${esc(g.cwd.split("/").filter(Boolean).pop() || g.cwd)}</span>${closed ? `<span class="n">${g.list.length}</span>` : ""}<span class="add" title="New session in ${esc(g.cwd.replace("__REFLEX_HOME__", "~"))}">+</span>`;
+    head.onclick = () => { if (closed) delete sideUi.collapsed[g.cwd]; else sideUi.collapsed[g.cwd] = 1; saveSideUi(); drawSidebar(true); };
+    head.querySelector(".add").onclick = e => { e.stopPropagation(); startIn(g.cwd); };
+    wrap.appendChild(head);
+    if (!closed) {
+      const keep = Math.max(SIDE_ROWS, g.list.filter(live).length), all = !!sideUi.more[g.cwd];
+      for (const r of all ? g.list : g.list.slice(0, keep)) wrap.appendChild(sideRow(r));
+      if (g.list.length > keep) {
+        const more = document.createElement("div"); more.className = "more"; more.textContent = all ? "Show less" : `More (${g.list.length - keep})`;
+        more.onclick = () => { if (all) delete sideUi.more[g.cwd]; else sideUi.more[g.cwd] = 1; saveSideUi(); drawSidebar(true); };
+        wrap.appendChild(more);
+      }
+    }
+    box.appendChild(wrap);
   }
-  if (state.terminal.length) sec("Live in terminal");
-  for (const t of state.terminal) {
-    const div = document.createElement("div");
-    div.className = "sess term" + (state.current === "term:" + t.pid ? " active" : "");
-    div.innerHTML = `<span class="dot"></span><span>${esc(t.name)}</span><span class="meta">${esc(short(t.cwd).split("/").slice(-1)[0])}</span>`;
-    div.title = `${t.cwd}\npid ${t.pid} · ${t.model || ""}\nread-only mirror of the terminal`;
-    div.onclick = () => selectSession("term:" + t.pid);
-    box.appendChild(div);
+  if (!ordered.length) box.innerHTML = `<div class="empty" style="padding:20px">No sessions yet.<br>Press <b>+ new</b>, or start <code>reflex</code> in a terminal: it shows up here.</div>`;
+  box.scrollTop = top;
+}
+function sideRow(r) {
+  const div = document.createElement("div");
+  div.className = `sess ${r.kind}` + (state.current === r.key ? " active" : "") + (r.busy ? " busy" : "") + (r.dead ? " dead" : "") + (r.title ? "" : " untitled");
+  div.title = `${r.title || "New session"}\n${r.tip.replace("__REFLEX_HOME__", "~")}`;
+  div.innerHTML = `<span class="dot"></span><span class="t">${esc(r.title || "New session")}</span><span class="ago">${r.kind === "term" ? "terminal" : ago(r.at)}</span>${r.kind === "web" ? `<span class="acts"><span class="ren" title="Rename">✎</span><span class="x" title="Close (it stays in this project's history)">✕</span></span>` : ""}`;
+  if (r.kind === "past") div.onclick = () => resumeSession(r.r.path);
+  else div.onclick = () => selectSession(r.key);
+  if (r.kind === "web") {
+    div.querySelector(".ren").onclick = async e => {
+      e.stopPropagation();
+      const title = await askText("Rename session", "A short title", r.title || ""); if (!title || !title.trim()) return;
+      try { await api(`/api/sessions/${r.s.id}`, { method: "PATCH", body: JSON.stringify({ title }), headers: { "Content-Type": "application/json" } }); } catch (err) { notice("error", err.message); }
+      refreshSessions().then(render);
+    };
+    div.querySelector(".x").onclick = async e => { e.stopPropagation(); await api(`/api/sessions/${r.s.id}`, { method: "DELETE" }); delete state.views[r.key]; if (state.current === r.key) state.current = null; await refreshSessions(); render(); };
   }
-  if (state.history.length) sec("Session history");
-  for (const h of state.history.slice(0, 12)) {
-    const div = document.createElement("div");
-    div.className = "sess recent";
-    div.innerHTML = `<span class="dot"></span><span>⏱ ${esc(h.name.replace(".jsonl", ""))}</span>`;
-    div.title = `modified: ${new Date(h.modified).toLocaleString()}\nclick to resume`;
-    div.onclick = async () => { try { const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sessionFile: h.path }), headers: { "Content-Type": "application/json" } }); await refreshSessions(); selectSession("web:" + s.id); } catch (e) { await askText("Could not resume", "", e.message); } };
-    box.appendChild(div);
-  }
-  if (state.recent.length) sec("Recent projects");
-  for (const r of state.recent.slice(0, 12)) {
-    const div = document.createElement("div");
-    div.className = "sess recent";
-    div.innerHTML = `<span class="dot"></span><span>${esc(r.name)}</span><span class="meta">${esc(short(r.cwd).split("/").slice(-1)[0])}</span>`;
-    div.title = `${r.cwd}\n${new Date(r.modified).toLocaleString()} · ${r.messages} messages\nclick to resume in the web`;
-    div.onclick = async () => { try { const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ sessionFile: r.path }), headers: { "Content-Type": "application/json" } }); await refreshSessions(); selectSession("web:" + s.id); } catch (e) { await askText("Could not resume", "", e.message); } };
-    box.appendChild(div);
-  }
-  if (!box.children.length) box.innerHTML = `<div class="empty" style="padding:20px">No sessions yet.<br>Press <b>+ new</b>, or start <code>reflex</code> in a terminal: it shows up here.</div>`;
+  return div;
 }
 function askText(title, placeholder, prefill) {
   return new Promise(resolve => {
@@ -349,10 +394,7 @@ function askText(title, placeholder, prefill) {
 }
 async function newSession() {
   const cwd = await pickFolder(); if (!cwd) return;
-  try {
-    const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ cwd }), headers: { "Content-Type": "application/json" } });
-    state.lastCwd = cwd; await refreshSessions(); selectSession("web:" + s.id);
-  } catch (e) { await askText("Could not create session", "", e.message); }
+  await startIn(cwd);
 }
 /** Folder browser: recent projects, then navigate directories; no typing required. */
 function pickFolder() {
@@ -526,8 +568,8 @@ function render() { cancelAnimationFrame(raf); raf = requestAnimationFrame(paint
 function paint() {
   const id = state.current, v = id ? view(id) : null, chat = $("#chat");
   const s = id && id.startsWith("web:") ? state.sessions.find(x => "web:" + x.id === id) : id ? state.terminal.find(x => "term:" + x.pid === id) : null;
-  if (state.tab === "sessions") { $("#title").textContent = s ? `${s.name} · ${s.cwd.replace("__REFLEX_HOME__", "~")}${id.startsWith("term:") ? " · live in terminal (read-only)" : ""}` : "no session"; $("#title").title = s ? s.cwd : ""; }
-  document.querySelectorAll(".sess").forEach(el => el.classList.toggle("busy", !!(v && v.busy && el.classList.contains("active"))));
+  if (state.tab === "sessions") { $("#title").textContent = s ? `${s.title || "New session"} · ${s.cwd.replace("__REFLEX_HOME__", "~")}${id.startsWith("term:") ? " · live in terminal (read-only)" : ""}` : "no session"; $("#title").title = s ? s.cwd : ""; }
+  document.querySelectorAll(".sess.active").forEach(el => el.classList.toggle("busy", !!(v && v.busy)));
   if (!v) return;
   const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 60;
   chat.innerHTML = renderItems(v.items, v) || `<div class="empty">Say something.</div>`;
@@ -1402,7 +1444,7 @@ function showSettingsPage(k) {
   try { state.config = await api("/api/config"); $("#foot").textContent = `reflex ${state.config.reflex} · voice ${state.config.voice} · ${state.config.model}`; } catch {}
   await refreshSessions();
   if (state.sessions[0]) selectSession("web:" + state.sessions[0].id);
-  setInterval(refreshSessions, 5000);
+  setInterval(() => refreshSessions().catch(() => {}), 5000); /* a stopped server must not flood the console */
 })();
 </script>
 </body>

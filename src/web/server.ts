@@ -8,6 +8,7 @@
  *   GET  /                      the app
  *   GET  /api/sessions          list sessions
  *   POST /api/sessions          {cwd?, name?} → create (spawns a process)
+ *   PATCH  /api/sessions/:id    rename { title }
  *   DELETE /api/sessions/:id    stop
  *   GET  /api/sessions/:id/events   SSE stream of RPC events (+ replay of recent)
  *   POST /api/sessions/:id/rpc  forward one RPC command (prompt, abort, set_model, extension_ui_response, …)
@@ -27,6 +28,7 @@ import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { piStoredApiKey } from "../extensions/typesafe/state.js";
 import { transcribe } from "../extensions/voice/providers.js";
 import { convertToWav } from "./audio.js";
+import { cleanTitle } from "./titles.js";
 import { describeCron, parseCron } from "../agents/cron.js";
 import { attachRunListener, cancelRun, getLiveRun, liveRunsForAgent, resumeRun, runAgent } from "../agents/runner.js";
 import { startScheduler } from "../agents/scheduler.js";
@@ -87,6 +89,12 @@ interface Session {
 	resumeFile?: string;
 	resumeBaseSize?: number;
 	branch?: string | null;
+	/** What the sidebar shows: the user's name for it, else the first thing asked in it. */
+	title?: string;
+	/** The Pi session file, once the session reports it (used to keep it out of the history list). */
+	sessionFile?: string;
+	busy: boolean;
+	lastActive: number;
 }
 
 const sessions = new Map<string, Session>();
@@ -193,26 +201,26 @@ function broadcast(s: Session, line: string): void {
 	for (const res of s.clients) res.write(`data: ${line}\n\n`);
 }
 
-async function recentSessions(): Promise<Array<{ path: string; id: string; cwd: string; name: string; modified: number; messages: number }>> {
+async function recentSessions(limit = 80): Promise<Array<{ path: string; id: string; cwd: string; name: string; modified: number; messages: number }>> {
 	try {
 		const all = await SessionManager.listAll();
 		return all
 			.filter((s) => s.cwd && s.messageCount > 0)
 			.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime())
-			.slice(0, 20)
-			.map((s) => ({ path: s.path, id: s.id, cwd: s.cwd, name: s.name || s.firstMessage?.slice(0, 60) || s.cwd.split("/").pop() || s.id, modified: new Date(s.modified).getTime(), messages: s.messageCount }));
+			.slice(0, limit)
+			.map((s) => ({ path: s.path, id: s.id, cwd: s.cwd, name: cleanTitle(s.name) ?? cleanTitle(s.firstMessage) ?? "Untitled session", modified: new Date(s.modified).getTime(), messages: s.messageCount }));
 	} catch {
 		return [];
 	}
 }
 
-function createSession(cwd: string, name?: string, resumeFile?: string): Session {
+function createSession(cwd: string, name?: string, resumeFile?: string, title?: string): Session {
 	const id = randomUUID().slice(0, 8);
 	const extra = resumeFile ? ["--session", resumeFile] : [];
 	const proc = spawn(process.execPath, [cliPath(), "--mode", "rpc", ...extra], { cwd, env: { ...process.env, REFLEX_WEB: "1" }, stdio: ["pipe", "pipe", "pipe"] });
 	let resumeBaseSize = 0;
 	if (resumeFile) { try { resumeBaseSize = statSync(resumeFile).size; } catch {} }
-	const s: Session = { id, name: name ?? cwd.split("/").pop() ?? id, cwd, proc, buffer: "", recent: [], clients: new Set(), pendingUi: new Map(), createdAt: Date.now(), alive: true, resumeFile, resumeBaseSize };
+	const s: Session = { id, name: name ?? cwd.split("/").pop() ?? id, cwd, proc, buffer: "", recent: [], clients: new Set(), pendingUi: new Map(), createdAt: Date.now(), alive: true, resumeFile, resumeBaseSize, title, sessionFile: resumeFile, busy: false, lastActive: Date.now() };
 	proc.stdout?.setEncoding("utf8");
 	proc.stdout?.on("data", (chunk: string) => {
 		s.buffer += chunk;
@@ -222,7 +230,14 @@ function createSession(cwd: string, name?: string, resumeFile?: string): Session
 			s.buffer = s.buffer.slice(idx + 1);
 			if (!line.trim()) continue;
 			try {
-				const ev = JSON.parse(line) as { type?: string; id?: string; method?: string };
+				const ev = JSON.parse(line) as { type?: string; id?: string; method?: string; command?: string; success?: boolean; data?: { sessionFile?: string; sessionName?: string } };
+				if (ev.type === "response" && ev.command === "get_state" && ev.success && ev.data) {
+					if (ev.data.sessionFile) s.sessionFile = ev.data.sessionFile;
+					if (ev.data.sessionName) s.title = cleanTitle(ev.data.sessionName) ?? s.title;
+				}
+				if (ev.type === "agent_start") s.busy = true;
+				if (ev.type === "agent_end" || ev.type === "agent_settled") s.busy = false;
+				if (ev.type === "agent_start" || ev.type === "agent_end") s.lastActive = Date.now();
 				if (ev.type === "extension_ui_request" && ev.id && ["select", "confirm", "input", "editor"].includes(ev.method ?? "")) s.pendingUi.set(ev.id, ev);
 				if (ev.type === "extension_ui_response" && ev.id) s.pendingUi.delete(ev.id);
 				// A dialog cannot outlive the agent run that opened it (Pi cancels it on abort/end), so drop stale ones here.
@@ -237,6 +252,7 @@ function createSession(cwd: string, name?: string, resumeFile?: string): Session
 	proc.stderr?.on("data", (chunk: string) => broadcast(s, JSON.stringify({ type: "stderr", text: String(chunk) })));
 	proc.on("exit", (code) => {
 		s.alive = false;
+		s.busy = false;
 		broadcast(s, JSON.stringify({ type: "session_exit", code }));
 	});
 	sessions.set(id, s);
@@ -246,6 +262,10 @@ function createSession(cwd: string, name?: string, resumeFile?: string): Session
 function send(s: Session, command: Record<string, unknown>): void {
 	if (!s.alive) throw new Error("session has exited");
 	if (command.type === "extension_ui_response" && typeof command.id === "string") s.pendingUi.delete(command.id);
+	if (command.type === "prompt" && typeof command.message === "string") {
+		s.lastActive = Date.now();
+		s.title ??= cleanTitle(command.message);
+	}
 	s.proc.stdin?.write(`${JSON.stringify(command)}\n`);
 }
 
@@ -340,11 +360,13 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			if (url.pathname === "/api/sessions" && req.method === "GET") {
 				const live = livePresence();
 				for (const s of sessions.values()) s.branch = gitBranch(s.cwd);
-				const openFiles = new Set([...sessions.values()].map((s) => s.resumeFile).filter(Boolean));
-				const recent = (await recentSessions()).filter((r) => !live.some((p) => p.sessionFile === r.path) && !openFiles.has(r.path));
+				const openFiles = new Set([...sessions.values()].flatMap((s) => [s.resumeFile, s.sessionFile]).filter(Boolean));
+				const all = await recentSessions();
+				const titleOf = new Map(all.map((r) => [r.path, r.name]));
+				const recent = all.filter((r) => !live.some((p) => p.sessionFile === r.path) && !openFiles.has(r.path));
 				return json(res, 200, {
-					sessions: [...sessions.values()].map((s) => ({ id: s.id, name: s.name, cwd: s.cwd, alive: s.alive, createdAt: s.createdAt, branch: s.branch ?? null, pendingUi: [...s.pendingUi.values()] })),
-					terminal: live,
+					sessions: [...sessions.values()].map((s) => ({ id: s.id, name: s.name, title: s.title ?? null, cwd: s.cwd, alive: s.alive, busy: s.busy, createdAt: s.createdAt, lastActive: s.lastActive, branch: s.branch ?? null, pendingUi: [...s.pendingUi.values()] })),
+					terminal: live.map((p) => ({ ...p, title: (p.sessionFile && titleOf.get(p.sessionFile)) || null })),
 					recent,
 				});
 			}
@@ -355,6 +377,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { cwd?: string; name?: string; sessionFile?: string };
 				let cwd = resolve((body.cwd ?? process.cwd()).replace(/^~(?=$|\/)/, homedir()));
 				let resumeFile: string | undefined;
+				let title: string | undefined;
 				if (body.sessionFile) {
 					if (!existsSync(body.sessionFile)) return json(res, 404, { error: "session file not found" });
 					if (livePresence().some((p) => p.sessionFile === body.sessionFile)) return json(res, 409, { error: "that session is open in a terminal right now; close it there first" });
@@ -364,13 +387,14 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 					resumeFile = body.sessionFile;
 					const info = (await recentSessions()).find((r) => r.path === body.sessionFile);
 					if (info?.cwd && existsSync(info.cwd)) cwd = info.cwd;
+					title = info?.name;
 				} else {
-					// Don't spawn a duplicate: if a live web session with no resume file already has this cwd, return it.
-					const dup = [...sessions.values()].find((s) => s.alive && !s.resumeFile && s.cwd === cwd);
+					// Several conversations per project are fine; two empty ones are not.
+					const dup = [...sessions.values()].find((s) => s.alive && !s.resumeFile && !s.title && s.cwd === cwd);
 					if (dup) return json(res, 200, { id: dup.id, name: dup.name, cwd: dup.cwd });
 				}
 				if (!existsSync(cwd)) return json(res, 400, { error: `directory not found: ${cwd}` });
-				const s = createSession(cwd, body.name, resumeFile);
+				const s = createSession(cwd, body.name, resumeFile, title);
 				return json(res, 201, { id: s.id, name: s.name, cwd: s.cwd });
 			}
 			const m = url.pathname.match(/^\/api\/sessions\/([a-z0-9-]+)(?:\/(events|rpc|state))?$/);
@@ -424,6 +448,14 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				}
 				if (m[2] === "state" && req.method === "GET") {
 					return json(res, 200, { id: s.id, name: s.name, cwd: s.cwd, alive: s.alive, pendingUi: [...s.pendingUi.values()] });
+				}
+				if (!m[2] && req.method === "PATCH") {
+					const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { title?: string };
+					const title = String(body.title ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+					if (!title) return json(res, 400, { error: "a title needs some text" });
+					s.title = title;
+					if (s.alive) send(s, { type: "set_session_name", name: title }); // Pi stores it in the session file, so it survives a restart
+					return json(res, 200, { ok: true, title });
 				}
 				if (!m[2] && req.method === "DELETE") {
 					s.proc.kill();
