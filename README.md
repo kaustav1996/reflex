@@ -291,7 +291,7 @@ Settings → Skills. Packages are Pi packages from npm or git
 
 The TUI and the web page use the typesafe.ai palette: near-black `#1e1e1e`, off-white `#fefefe`,
 pink `#f386a1`, green `#03aa5c`, teal `#09aea1`, magenta `#d45bb6`, with a System-1-style striped
-window header. Themes `typesafe` and `typesafe-light` are installed into `~/.reflex/agent/themes`.
+window header. Themes `typesafe`, `typesafe-light`, `wafer`, `wafer-light`, `apple`, and `apple-light` are installed into `~/.reflex/agent/themes`. The web UI also offers Wafer and Apple (Liquid Glass, from [apple-design-skill](https://github.com/dickwu/apple-design-skill)) under Settings → Look (issue #9 stays open for more community themes).
 
 ## Architecture
 
