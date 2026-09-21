@@ -12,6 +12,34 @@ import type { ReflexState } from "./state.js";
 import { loadMcpConfig } from "../mcp/client.js";
 
 export const MIN_HINT_PROBABILITY = 0.5;
+/** Options offered in one Jev Choice. Jev accepts up to 255; "none" takes one slot. */
+export const MAX_CHOICE_OPTIONS = 250;
+
+const STOP = new Set(["the", "and", "for", "with", "that", "this", "from", "into", "your", "you", "are", "can", "use", "when", "what", "how", "please", "need", "want", "make", "help"]);
+const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w)));
+
+/**
+ * The items to offer Jev when there are more than one Choice can hold: the ones sharing the
+ * most words with the request (name counts double), original order breaking ties. With a large
+ * package installed (ECC has ~285 skills) this replaces "the first 250", which hid every skill
+ * after the cut no matter how well it matched.
+ */
+export function shortlist<T extends { name: string; text?: string }>(items: T[], request: string, max = MAX_CHOICE_OPTIONS): T[] {
+	if (items.length <= max) return items;
+	const req = words(request);
+	const score = (it: T) => {
+		let n = 0;
+		for (const w of words(it.name.replace(/[-_]/g, " "))) if (req.has(w)) n += 2;
+		for (const w of words(it.text ?? "")) if (req.has(w)) n += 1;
+		return n;
+	};
+	return items
+		.map((it, i) => ({ it, i, s: score(it) }))
+		.sort((a, b) => b.s - a.s || a.i - b.i)
+		.slice(0, max)
+		.sort((a, b) => a.i - b.i)
+		.map((x) => x.it);
+}
 
 export function hintsFrom(
 	answers: { skill?: ChoiceAnswer; connector?: ChoiceAnswer },
@@ -39,14 +67,15 @@ export function registerSelector(pi: ExtensionAPI, state: ReflexState): void {
 		if (!policy.enabled || !state.client || policy.selectSkills === false) return undefined;
 		const prompt = event.prompt?.trim();
 		if (!prompt || prompt.startsWith("/") || prompt.length < 12) return undefined;
-		const skills = (event.systemPromptOptions?.skills ?? []) as Array<{ name: string; description?: string }>;
-		const servers = Object.entries(loadMcpConfig().servers).filter(([, s]) => s.enabled !== false).map(([name, s]) => ({ name, hint: s.command ? [s.command, ...(s.args ?? [])].join(" ") : (s.url ?? "") }));
+		const allSkills = (event.systemPromptOptions?.skills ?? []) as Array<{ name: string; description?: string }>;
+		const skills = shortlist(allSkills.map((sk) => ({ ...sk, text: sk.description })), prompt);
+		const servers = shortlist(Object.entries(loadMcpConfig().servers).filter(([, s]) => s.enabled !== false).map(([name, s]) => ({ name, hint: s.command ? [s.command, ...(s.args ?? [])].join(" ") : (s.url ?? ""), text: name })), prompt);
 		if (skills.length + servers.length === 0) return undefined;
 
 		const skillCriteria: Record<string, string> = { none: "No skill is needed; the request is ordinary coding or conversation." };
-		for (const sk of skills.slice(0, 250)) skillCriteria[sk.name] = clip(sk.description ?? sk.name, 300);
+		for (const sk of skills) skillCriteria[sk.name] = clip(sk.description ?? sk.name, 300);
 		const serverCriteria: Record<string, string> = { none: "No external connector is needed; local files and the shell suffice." };
-		for (const sv of servers.slice(0, 250)) serverCriteria[sv.name] = `Connector "${sv.name}" (${clip(sv.hint, 120)})`;
+		for (const sv of servers) serverCriteria[sv.name] = `Connector "${sv.name}" (${clip(sv.hint, 120)})`;
 
 		const questions: Record<string, ReturnType<typeof choice>> = {};
 		if (skills.length) questions.skill = choice({ question: "Which skill's instructions would most help carry out request? Pick none when ordinary knowledge suffices.", inspect: ["request", "recent_context"] }, skillCriteria);
@@ -60,8 +89,8 @@ export function registerSelector(pi: ExtensionAPI, state: ReflexState): void {
 					skill: skillAns as ChoiceAnswer | undefined,
 					connector: connAns as ChoiceAnswer | undefined,
 				},
-				skills.map((sk) => sk.name).slice(0, 250),
-				servers.map((server) => server.name).slice(0, 250),
+				skills.map((sk) => sk.name),
+				servers.map((server) => server.name),
 			);
 			state.record("select", hints.length ? hints.join(" · ") : `none relevant (skill ${skillAns ? `${skillAns.choice} ${pct(skillAns.confidence)}` : "-"}, connector ${connAns ? `${connAns.choice} ${pct(connAns.confidence)}` : "-"})`);
 			if (!hints.length) return undefined;

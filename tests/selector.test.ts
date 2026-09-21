@@ -67,3 +67,13 @@ test("none and choices outside the available lists never produce hints", () => {
 		[],
 	);
 });
+
+test("with more skills than one Choice holds, the ones matching the request are offered", async () => {
+	const { shortlist, MAX_CHOICE_OPTIONS } = await import("../src/extensions/typesafe/selector.ts");
+	const many = Array.from({ length: 300 }, (_, i) => ({ name: `skill-${i}`, text: "generic helper" }));
+	many.push({ name: "postgres-migrations", text: "write and review database migrations for postgres" });
+	const picked = shortlist(many, "write a postgres migration for the users table");
+	assert.equal(picked.length, MAX_CHOICE_OPTIONS);
+	assert.ok(picked.some((s) => s.name === "postgres-migrations"), "a matching skill past position 250 is still offered");
+	assert.deepEqual(shortlist(many.slice(0, 10), "anything"), many.slice(0, 10), "short lists pass through unchanged");
+});

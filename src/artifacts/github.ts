@@ -96,7 +96,10 @@ export class Github {
 		try {
 			await json(`${API}/repos/${this.owner}/${this.repoName(slug)}`, { method: "DELETE", token: this.token });
 		} catch (err) {
-			if (!(err instanceof HttpError && (err.status === 404 || err.status === 403))) throw err;
+			if (err instanceof HttpError && err.status === 404) return; // already gone
+			// 403 means the login may not delete repositories: say so instead of reporting success.
+			if (err instanceof HttpError && err.status === 403) throw new Error(`GitHub refused to delete ${this.owner}/${this.repoName(slug)}: the login lacks the delete_repo scope (run \`gh auth refresh -h github.com -s delete_repo\`)`);
+			throw err;
 		}
 	}
 

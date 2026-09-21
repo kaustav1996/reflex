@@ -205,6 +205,12 @@
   .conn-card .txt { min-width: 0; flex: 1; }
   .conn-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .conn-tag { font-size: 11px; color: var(--gray); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conn-filter { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  .conn-filter input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); flex: 1; min-width: 180px; }
+  .conn-filter .b.on { background: var(--pink); color: #1e1e1e; border-color: var(--pink); }
+  .rec-card { border: 1px solid var(--line); padding: 10px; margin: 6px 0 10px; box-shadow: 2px 2px 0 var(--pink); }
+  .rec-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+  .conn-src { font-size: 9px; font-weight: 700; letter-spacing: .04em; border: 1px solid var(--gray); color: var(--gray); padding: 0 3px; vertical-align: middle; }
   .conn-ok { color: #3fb950; border: 1px solid #3fb950; padding: 0 6px; font-size: 13px; flex-shrink: 0; }
   .conn-head { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
   .conn-head .conn-icon { width: 60px; height: 60px; } .conn-head .conn-icon svg { width: 36px; height: 36px; }
@@ -296,6 +302,7 @@ __REFLEX_STALE__
 <div id="overlay"><div class="dialog win"><div class="titlebar"><span class="tag pink" id="dTitle">Reflex</span></div><div class="body" id="dBody"></div><div class="opts" id="dOpts"></div><div class="row" id="dRow"></div></div></div>
 <script>
 const TOKEN = "__REFLEX_TOKEN__";
+const ECC_SOURCE = "git:github.com/affaan-m/ECC";
 const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "x-reflex-token": TOKEN, ...(opts.headers || {}) } }).then(async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
 const $ = s => document.querySelector(s);
 const state = { sessions: [], current: null, es: null, views: {}, config: {} };
@@ -973,7 +980,11 @@ async function loadSettings() {
     <div class="card" id="s-artifacts"><h3>Artifact defaults</h3><div class="hint">Every artifact deploys with these unless it sets its own domain, region or repo visibility on its page (Artifacts tab).</div><div id="artSettingsBody"></div></div>
     <div class="card" id="s-hooks"><h3>Hooks</h3><div class="hint">When a session does X, run Y. A hook fires on a session event, optionally narrowed by a matcher and by a TypeSafe yes/no question, and then starts one of your workflow agents or runs a shell command. Each firing shows in the session as a <b>hook</b> line and in Logs. These are your global hooks (every project); a project can add its own in <code>.reflex/hooks.json</code>, which stay off until you approve that file in a session.</div><div id="hooksBody"></div></div>
     <div class="card" id="s-logs"><h3>Call logs</h3><div class="hint">Every TypeSafe (Jev) request with its state, questions and answers; every LLM response with tokens and cost; voice transcriptions; browser-agent steps. From all sessions and agent runs on this machine (~/.reflex/logs/calls.jsonl). Secrets are masked before writing: known keys as <code>[SECRET:NAME]</code>, anything that looks like a credential as <code>[SECRET:#hash]</code>.</div><div id="logsBody"></div></div>
-    <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3><div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
+    <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3>
+      ${(() => { const src = ECC_SOURCE, on = (d.packages || []).some(p => String(typeof p === "string" ? p : p.source).includes("affaan-m/ECC")); return `<div class="rec-card"><div class="rec-head"><b>ECC</b> <span class="conn-src">recommended</span> <a href="https://github.com/affaan-m/ECC" target="_blank">github.com/affaan-m/ECC ↗</a><span style="flex:1"></span>${on ? `<span class="b small" style="cursor:default">✓ installed</span><button class="b small" id="eccBtn" data-act="remove">remove</button>` : `<button class="b small primary" id="eccBtn" data-act="install">install ECC</button>`}</div>
+        <div class="hint">Skills, commands, rules and session hooks for coding agents, installed as a Pi package: 292 skills and 94 commands (<code>/skill:&lt;name&gt;</code>, <code>/&lt;command&gt;</code>), and ECC's engineering rules added to every prompt. Its MCP servers are separate cards under <b>Connectors</b> (filter <b>ECC</b>); each stays off until you connect it.</div>
+        <div class="hint"><b>Before installing:</b> ECC adds about 46,000 tokens to every request (≈42k for the list of its 292 skills, ≈4.6k for its rules), about ten times Reflex's usual prompt, so each turn costs more and a small-context model may not fit. Its session start and end hooks also run its own scripts on this machine. Source: <code>${esc(src)}</code>.</div></div>`; })()}
+      <div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
       <div class="rowbtns"><input id="pkgSrc" placeholder="npm:@scope/pkg  ·  git:github.com/user/repo  ·  https://github.com/user/repo" style="flex:1;font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink)"><button class="b small" id="pkgAdd">install</button></div><pre class="out" id="pkgOut" style="display:none"></pre>
       <div class="hint">Browse packages at <a href="https://pi.dev/packages" target="_blank">pi.dev/packages</a>. MCP bridges, sandboxes, subagents and more are packages.</div></div>
     <div class="card" id="s-skills"><h3>Skills</h3>
@@ -1008,6 +1019,11 @@ async function loadSettings() {
       $("#sMsg").textContent = r.shadowed && r.shadowed.length ? `saved ✓ — but ${r.shadowed.join(", ")} is set in your environment or .env and takes precedence; remove it there to use the saved key` : "saved ✓";
       setTimeout(loadSettings, r.shadowed && r.shadowed.length ? 6000 : 800);
     } catch (e) { $("#sMsg").textContent = "✗ " + e.message; } };
+  $("#eccBtn") && ($("#eccBtn").onclick = async () => {
+    const b = $("#eccBtn"), act = b.dataset.act, out = $("#pkgOut"); b.disabled = true; out.style.display = ""; out.textContent = act === "install" ? "installing ECC (cloning the repository, about 50 MB)…" : "removing ECC…";
+    try { const r = await api("/api/packages", { method: "POST", body: JSON.stringify({ action: act, source: ECC_SOURCE }), headers: { "Content-Type": "application/json" } }); out.textContent = (r.output || "done") + "\nNew sessions pick it up; open a new session to use ECC's skills."; setTimeout(loadSettings, 800); }
+    catch (e) { b.disabled = false; out.textContent = "✗ " + e.message; }
+  });
   $("#pkgAdd").onclick = async () => { const out = $("#pkgOut"); out.style.display = ""; out.textContent = "installing…"; try { const r = await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "install", source: $("#pkgSrc").value.trim() }), headers: { "Content-Type": "application/json" } }); out.textContent = r.output || "installed"; setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
   document.querySelectorAll("[data-rm]").forEach(x => x.onclick = async () => { await api("/api/packages", { method: "POST", body: JSON.stringify({ action: "remove", source: x.dataset.rm }), headers: { "Content-Type": "application/json" } }).catch(e => notice("error", e.message)); loadSettings(); });
   $("#skillAdd").onclick = async () => { const out = $("#skillOut"); out.style.display = ""; out.textContent = "cloning…"; try { const r = await api("/api/skills", { method: "POST", body: JSON.stringify({ repo: $("#skillRepo").value.trim(), skill: $("#skillName").value.trim() || undefined }), headers: { "Content-Type": "application/json" } }); out.textContent = "installed: " + r.installed.join(", "); setTimeout(loadSettings, 800); } catch (e) { out.textContent = "✗ " + e.message; } };
@@ -1046,10 +1062,21 @@ function drawConnectors() {
   const servers = state.settings.mcp.servers || {};
   if (state.connView) return drawConnector(body, presets, servers);
   const isOn = p => !!servers[p.id] || presets.some(v => v.variantOf === p.id && servers[v.id]);
-  const presetCards = presets.filter(p => !p.variantOf).map(p => `<div class="conn-card" data-conn="${esc(p.id)}">${connIcon(p.id)}<div class="txt"><div class="conn-name">${esc(p.label)}</div><div class="conn-tag">${esc(p.tagline || p.description)}</div></div>${isOn(p) ? '<span class="conn-ok" title="connected">✓</span>' : ""}</div>`);
-  const customCards = Object.entries(servers).filter(([n]) => !presets.some(p => p.id === n)).map(([n, sv]) => `<div class="conn-card" data-conn="${esc(n)}">${connIcon("custom")}<div class="txt"><div class="conn-name">${esc(n)}</div><div class="conn-tag">${esc(sv.url || [sv.command, ...(sv.args || [])].join(" "))}</div></div><span class="conn-ok" ${sv.enabled === false ? 'style="color:var(--gray);border-color:var(--gray)" title="disabled"' : 'title="enabled"'}>${sv.enabled === false ? "off" : "✓"}</span></div>`);
-  body.innerHTML = `<div class="conn-grid">${presetCards.join("")}${customCards.join("")}</div>${!presetCards.length && !customCards.length ? '<span class="hint">no connectors</span>' : ""}`;
-  body.querySelectorAll("[data-conn]").forEach(el => el.onclick = () => { state.connView = el.dataset.conn; drawConnectors(); $("#settingsPane").scrollTop = 0; });
+  const sources = [...new Set(presets.map(p => p.source).filter(Boolean))];
+  state.connSource ||= "all";
+  body.innerHTML = `<div class="conn-filter"><input id="connQ" placeholder="Search ${presets.filter(p => !p.variantOf).length} connectors" value="${esc(state.connQuery || "")}" spellcheck="false">${["all", "reflex", ...sources].map(src => `<button class="b small${state.connSource === src ? " on" : ""}" data-src="${esc(src)}">${src === "all" ? "All" : src === "reflex" ? "Reflex" : esc(src)}</button>`).join("")}</div><div class="conn-grid" id="connGrid"></div>`;
+  const grid = () => {
+    const q = (state.connQuery || "").toLowerCase().trim(), src = state.connSource;
+    const match = p => (!q || `${p.label} ${p.tagline} ${p.category} ${p.description}`.toLowerCase().includes(q)) && (src === "all" || (src === "reflex" ? !p.source : p.source === src));
+    const presetCards = presets.filter(p => !p.variantOf && match(p)).map(p => `<div class="conn-card" data-conn="${esc(p.id)}">${connIcon(p.id)}<div class="txt"><div class="conn-name">${esc(p.label)}${p.source ? ` <span class="conn-src" title="from ${esc(p.source)}">${esc(p.source)}</span>` : ""}</div><div class="conn-tag">${esc(p.tagline || p.description)}</div></div>${isOn(p) ? '<span class="conn-ok" title="connected">✓</span>' : ""}</div>`);
+    const customCards = src !== "all" ? [] : Object.entries(servers).filter(([n]) => !presets.some(p => p.id === n) && (!q || n.toLowerCase().includes(q))).map(([n, sv]) => `<div class="conn-card" data-conn="${esc(n)}">${connIcon("custom")}<div class="txt"><div class="conn-name">${esc(n)}</div><div class="conn-tag">${esc(sv.url || [sv.command, ...(sv.args || [])].join(" "))}</div></div><span class="conn-ok" ${sv.enabled === false ? 'style="color:var(--gray);border-color:var(--gray)" title="disabled"' : 'title="enabled"'}>${sv.enabled === false ? "off" : "✓"}</span></div>`);
+    const g = $("#connGrid");
+    g.innerHTML = presetCards.join("") + customCards.join("") || '<span class="hint">no connectors match</span>';
+    g.querySelectorAll("[data-conn]").forEach(el => el.onclick = () => { state.connView = el.dataset.conn; drawConnectors(); $("#settingsPane").scrollTop = 0; });
+  };
+  const qi = $("#connQ"); qi.oninput = () => { state.connQuery = qi.value; grid(); };
+  body.querySelectorAll("[data-src]").forEach(b => b.onclick = () => { state.connSource = b.dataset.src; drawConnectors(); });
+  grid();
 }
 function drawConnector(body, presets, servers) {
   const view = state.connView, p = presets.find(x => x.id === view);
@@ -1063,6 +1090,7 @@ function drawConnector(body, presets, servers) {
   const name = p ? p.label : id, tag = p ? p.tagline : (sv?.url || [sv?.command, ...(sv?.args || [])].join(" "));
   const methodPick = p && methods.length > 1 && !connected ? `<span style="display:flex;gap:8px;font-size:11px;align-items:center">${methods.map(m => `<label><input type="radio" name="cMethod" value="${esc(m.id)}" ${m.id === chosen.id ? "checked" : ""} style="vertical-align:middle"> ${esc(m.method || m.label)}</label>`).join("")}</span>` : "";
   const keyField = p && chosen.auth === "api-key" && !connected ? `<input id="cKey" type="password" placeholder="${esc(chosen.envVar || "API key")}" style="font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink);width:180px">` : "";
+  const fieldInputs = p && (chosen.fields || []).length && !connected ? (chosen.fields || []).map(f => `<input class="cField" data-key="${esc(f.key)}" placeholder="${esc(f.placeholder || f.label)}" title="${esc(f.label)}" spellcheck="false" style="font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink);width:200px">`).join("") : "";
   const roField = p && chosen.readOnlyOption && !connected ? `<label style="font-size:11px"><input type="checkbox" id="cRo" style="vertical-align:middle"> read-only</label>` : "";
   const primary = p
     ? (connected ? `<span class="b" style="cursor:default">✓ Connected${methods.length > 1 ? ` · ${esc(active.method || "")}` : ""}</span>` : `<button class="b primary" id="cConnect">Connect</button>`)
@@ -1073,16 +1101,17 @@ function drawConnector(body, presets, servers) {
     : connected ? `<div class="hint" id="cToolsHint">loading tools from the server…</div>` : '<span class="hint">Tools are listed after you connect.</span>';
   const link = (u, label) => u ? `<a href="${esc(u)}" target="_blank">${label} ↗</a>` : "";
   const meta = p ? `<div class="conn-meta">
-      <div><div class="k">Made by</div><div class="v">${link(p.madeBy.url, esc(p.madeBy.name))}</div></div>
+      <div><div class="k">Made by</div><div class="v">${link(chosen.madeBy.url, esc(chosen.madeBy.name))}</div></div>
       <div><div class="k">Connector URL</div><div class="v"><code>${esc(chosen.endpoint)}</code></div></div>
       <div><div class="k">Categories</div><div class="v">${(p.categories || []).map(c => `<span class="chip">${esc(c)}</span>`).join("")}</div></div>
       <div><div class="k">Transport</div><div class="v">${esc(chosen.transport || "")}</div></div>
-      <div><div class="k">Sign-in</div><div class="v">${methods.length > 1 ? methods.map(m => `${esc(m.method)}${m.auth === "api-key" ? ` (${esc(m.envVar || "")})` : ""}`).join(" or ") : chosen.auth === "oauth" ? "Required (OAuth in your browser)" : chosen.auth === "cli" ? "Uses the vendor CLI's own login" : `API key · ${esc(chosen.envVar || "")}`}</div></div>
-      <div><div class="k">More info</div><div class="v">${link(p.docsUrl, "Documentation")}${link(p.links?.support, "Support")}${link(p.links?.privacy, "Privacy Policy")}</div></div>
+      <div><div class="k">Sign-in</div><div class="v">${methods.length > 1 ? methods.map(m => `${esc(m.method || m.label)}${m.auth === "api-key" ? ` (${esc(m.envVar || "")})` : ""}`).join(" or ") : chosen.auth === "oauth" ? "Required (OAuth in your browser)" : chosen.auth === "cli" ? (chosen.source ? "None (runs locally)" : "Uses the vendor CLI's own login") : chosen.auth === "none" ? "None" : `API key · ${esc(chosen.envVar || "")}`}${(chosen.fields || []).length ? ` · also ${(chosen.fields || []).map(f => esc(f.label)).join(", ")}` : ""}</div></div>
+      ${p.source ? `<div><div class="k">Listed by</div><div class="v">${link("https://github.com/affaan-m/ECC", esc(p.source))}</div></div>` : ""}
+      <div><div class="k">More info</div><div class="v">${link(chosen.docsUrl || p.docsUrl, "Documentation")}${link(p.links?.support, "Support")}${link(p.links?.privacy, "Privacy Policy")}</div></div>
     </div>`
     : `<div class="conn-meta"><div><div class="k">${sv?.url ? "URL" : "Command"}</div><div class="v"><code>${esc(sv?.url || [sv?.command, ...(sv?.args || [])].join(" "))}</code></div></div><div><div class="k">Transport</div><div class="v">${sv?.url ? "streamable HTTP" : "stdio"}</div></div><div><div class="k">State</div><div class="v">${sv?.enabled === false ? "disabled" : "enabled"}</div></div></div>`;
   body.innerHTML = `<span class="back" id="cBack">← all connectors</span>
-    <div class="conn-head">${connIcon(p ? p.id : "custom")}<div><h2>${esc(name)}</h2><div class="sub">${esc(tag || "")}</div></div><div class="conn-actions">${methodPick}${keyField}${roField}${primary}${menu}</div></div>
+    <div class="conn-head">${connIcon(p ? p.id : "custom")}<div><h2>${esc(name)}</h2><div class="sub">${esc(tag || "")}</div></div><div class="conn-actions">${methodPick}${fieldInputs}${keyField}${roField}${primary}${menu}</div></div>
     ${p ? `<div class="conn-about">${esc((chosen.id !== p.id ? chosen.about : p.about) || p.description)}</div>` : ""}
     ${p && chosen.note ? `<div class="notice-box" style="border-color:var(--pink);color:var(--ink)">⚠ ${esc(chosen.note)}</div>` : ""}
     <h3 style="margin:14px 0 4px">Tools</h3>${toolsHtml}<pre class="out" id="cOut" style="display:none"></pre>
@@ -1103,9 +1132,10 @@ function drawConnector(body, presets, servers) {
   $("#cToggle") && ($("#cToggle").onclick = async () => { sv.enabled = sv.enabled === false; await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers }), headers: { "Content-Type": "application/json" } }); drawConnectors(); });
   $("#cConnect") && ($("#cConnect").onclick = async () => {
     const b = $("#cConnect"); const apiKey = $("#cKey")?.value.trim(); const readOnly = $("#cRo")?.checked;
+    const fields = Object.fromEntries([...document.querySelectorAll(".cField")].map(i => [i.dataset.key, i.value.trim()]));
     b.disabled = true; b.textContent = chosen.auth === "oauth" ? "opening OAuth… finish it in the browser tab" : "connecting…";
     try {
-      const r = await api("/api/mcp/connect", { method: "POST", body: JSON.stringify({ id, readOnly, apiKey, connect: true }), headers: { "Content-Type": "application/json" } });
+      const r = await api("/api/mcp/connect", { method: "POST", body: JSON.stringify({ id, readOnly, apiKey, fields, connect: true }), headers: { "Content-Type": "application/json" } });
       state.settings.mcp = r.mcp; if (r.tools) state.connTools[id] = r.tools;
       notice("info", `✓ ${name}: ${r.server?.name || "connected"} · ${r.tools?.length ?? 0} tools`); drawConnectors();
     } catch (e) { b.disabled = false; b.textContent = "Connect"; out("✗ connect failed — OAuth consent may have been aborted or timed out. Nothing was saved; try again.\n" + e.message); }

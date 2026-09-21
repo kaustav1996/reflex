@@ -88,6 +88,16 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	// Package commands go straight to Pi's package manager. They must reach it with the command as the
+	// first argument: the flags added below (--use-theme, --model) would otherwise turn
+	// `reflex install <source>` into a chat prompt.
+	if (sub === "install" || sub === "remove" || sub === "uninstall" || sub === "update" || sub === "list" || sub === "config") {
+		const { main } = await import("@earendil-works/pi-coding-agent");
+		const { createReflexExtensions } = await import("./extensions/index.js");
+		await main(args, { extensionFactories: createReflexExtensions(loadReflexConfig()) });
+		return;
+	}
+
 	let config = loadReflexConfig();
 	const interactive = process.stdin.isTTY && !args.includes("-p") && !args.includes("--print") && !args.includes("--mode");
 	if (!config.onboarded && interactive) {
@@ -156,6 +166,8 @@ Usage:
   reflex agent list|run|runs|create|delete    scheduled / webhook agents (see skill reflex-agents)
   reflex jev --state <text|@file> --questions <json|@file>   ask TypeSafe Jev directly (typed decisions in ~100ms)
   reflex connect [id]                          enable a built-in MCP connector (gmail, slack, atlassian, linear)
+  reflex install <source> | remove <source>    install or remove a Pi package (e.g. git:github.com/affaan-m/ECC)
+  reflex list | update                         list installed packages, or update them
   reflex install <npm:pkg|git:repo>           install a Pi package (extensions, skills, prompts, themes)
 
 Inside the agent:

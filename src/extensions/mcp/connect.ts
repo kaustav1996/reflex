@@ -9,6 +9,8 @@
  *   reflex connect linear-key       enable Linear with a personal API key
  *   reflex connect linear --readonly  read-only variant where supported
  *   reflex connect linear-key --key lin_api_xxx   provide the key inline
+ *   reflex connect jira --key TOKEN --set JIRA_URL=https://x.atlassian.net --set JIRA_EMAIL=me@x.com
+ *                                   values a connector needs besides its key
  *   reflex connect remove slack     disable + delete a connector
  *
  * OAuth connectors spawn `npx -y mcp-remote <url>`: the first run opens a browser tab to
@@ -19,13 +21,13 @@
 import { createInterface } from "node:readline";
 import { loadMcpConfig, saveMcpConfig, type McpServerConfig } from "./client.js";
 import { loadStoredKeys, storeKey } from "../../config.js";
-import { findPreset, PRESETS, type ConnectorPreset } from "./presets.js";
+import { type ConnectorAuth, findPreset, PRESETS, type ConnectorPreset } from "./presets.js";
 import { clearOAuthCache } from "./authcache.js";
 
 export interface EnableResult {
 	id: string;
 	label: string;
-	auth: "oauth" | "api-key" | "cli";
+	auth: ConnectorAuth;
 	endpoint: string;
 	bridge?: string;
 }
@@ -34,7 +36,7 @@ export interface EnableResult {
  * for api-key presets (and stores it in keys.json), and optionally clears the OAuth cache
  * for a fresh consent. Used by the web connect flow so we can run OAuth first and only
  * persist on success. */
-export function buildPresetConfig(id: string, opts: { readOnly?: boolean; apiKey?: string; fresh?: boolean } = {}): { server: McpServerConfig; result: EnableResult } {
+export function buildPresetConfig(id: string, opts: { readOnly?: boolean; apiKey?: string; fresh?: boolean; fields?: Record<string, string> } = {}): { server: McpServerConfig; result: EnableResult } {
 	const preset = findPreset(id);
 	if (!preset) throw new Error(`unknown connector '${id}'`);
 	const readOnly = !!opts.readOnly;
@@ -48,12 +50,20 @@ export function buildPresetConfig(id: string, opts: { readOnly?: boolean; apiKey
 		if (!apiKey) throw new Error(`'${preset.id}' needs a ${preset.envVar ?? "API key"}`);
 		if (preset.envVar) storeKey(preset.id, apiKey);
 	}
+	const fields: Record<string, string> = {};
+	for (const f of preset.fields ?? []) {
+		const v = (opts.fields?.[f.key] ?? process.env[f.key] ?? "").trim();
+		if (!v) throw new Error(`'${preset.id}' needs ${f.label} (${f.key})`);
+		fields[f.key] = v;
+	}
 	if (preset.auth === "oauth" && opts.fresh) {
 		const url = preset.build({ readOnly }).url ?? preset.build({ readOnly }).args?.slice(-1)[0] ?? "";
 		if (url) clearOAuthCache(url);
 	}
-	const server: McpServerConfig = preset.build({ readOnly, apiKey });
+	const server: McpServerConfig = preset.build({ readOnly, apiKey, fields });
 	if (preset.envVar && apiKey) server.env = { ...(server.env ?? {}), [preset.envVar]: apiKey };
+	const envFields = (preset.fields ?? []).filter((f) => !f.arg);
+	if (envFields.length) server.env = { ...(server.env ?? {}), ...Object.fromEntries(envFields.map((f) => [f.key, fields[f.key]])) };
 	return {
 		server,
 		result: {
@@ -79,7 +89,7 @@ export function persistServer(id: string, server: McpServerConfig): void {
  * Used by the CLI (which resolves the key first); the web server uses buildPresetConfig +
  * a live connect so it only persists on OAuth success.
  */
-export function enablePreset(id: string, opts: { readOnly?: boolean; apiKey?: string; fresh?: boolean } = {}): EnableResult {
+export function enablePreset(id: string, opts: { readOnly?: boolean; apiKey?: string; fresh?: boolean; fields?: Record<string, string> } = {}): EnableResult {
 	const { server, result } = buildPresetConfig(id, opts);
 	persistServer(result.id, server);
 	return result;
@@ -134,7 +144,7 @@ export async function runConnectCli(args: string[]): Promise<void> {
 	if (!preset) return die(`unknown connector '${sub}'. Run 'reflex connect' to see options.`);
 
 	const flags = parseFlags(args.slice(1));
-	const readOnly = !!flags["readonly"] || !!flags["ro"];
+	const readOnly = flags.readonly;
 
 	let apiKey: string | undefined;
 	if (preset.auth === "api-key") {
@@ -142,8 +152,8 @@ export async function runConnectCli(args: string[]): Promise<void> {
 		if (!apiKey) return die(`'${preset.id}' needs a ${preset.envVar}. Set it in your env, pass --key, or run interactively.`);
 	}
 
-	const result = enablePreset(sub, { readOnly, apiKey, fresh: true });
-	const how = result.auth === "oauth" ? "OAuth — a browser tab will open on first connect (cached token cleared)" : result.auth === "cli" ? "local server; uses the vendor CLI's own login" : `API key (stored in ~/.reflex/keys.json)`;
+	const result = enablePreset(sub, { readOnly, apiKey, fresh: true, fields: flags.set });
+	const how = result.auth === "oauth" ? "OAuth — a browser tab will open on first connect (cached token cleared)" : result.auth === "cli" ? "local server (uses the vendor CLI's own login where it has one)" : result.auth === "none" ? "remote server; no sign-in" : `API key (stored in ~/.reflex/keys.json)`;
 	console.log(`✓ enabled connector '${result.id}' — ${result.label}`);
 	console.log(`  ${how}`);
 	console.log(`  endpoint: ${result.endpoint}`);
@@ -151,8 +161,8 @@ export async function runConnectCli(args: string[]): Promise<void> {
 	console.log(`  check with: reflex connect`);
 }
 
-async function resolveApiKey(preset: ConnectorPreset, flags: Record<string, string | boolean>): Promise<string | undefined> {
-	if (typeof flags["key"] === "string" && flags["key"]) return flags["key"];
+async function resolveApiKey(preset: ConnectorPreset, flags: ConnectFlags): Promise<string | undefined> {
+	if (flags.key) return flags.key;
 	const envName = preset.envVar;
 	if (envName && process.env[envName]) return process.env[envName];
 	const stored = loadStoredKeys()[preset.id];
@@ -163,13 +173,25 @@ async function resolveApiKey(preset: ConnectorPreset, flags: Record<string, stri
 	return undefined;
 }
 
-function parseFlags(args: string[]): Record<string, string | boolean> {
-	const out: Record<string, string | boolean> = {};
+interface ConnectFlags {
+	readonly: boolean;
+	key?: string;
+	/** `--set KEY=value`: values a connector needs besides its key. */
+	set: Record<string, string>;
+}
+
+function parseFlags(args: string[]): ConnectFlags {
+	const out: ConnectFlags = { readonly: false, set: {} };
 	for (let i = 0; i < args.length; i++) {
 		const a = args[i];
-		if (a === "--readonly" || a === "--ro") out["readonly"] = true;
-		else if (a === "--key") out["key"] = args[++i];
-		else if (a.startsWith("--key=")) out["key"] = a.slice(6);
+		if (a === "--readonly" || a === "--ro") out.readonly = true;
+		else if (a === "--key") out.key = args[++i];
+		else if (a.startsWith("--key=")) out.key = a.slice(6);
+		else if (a === "--set" || a.startsWith("--set=")) {
+			const kv = a === "--set" ? (args[++i] ?? "") : a.slice(6);
+			const eq = kv.indexOf("=");
+			if (eq > 0) out.set[kv.slice(0, eq)] = kv.slice(eq + 1);
+		}
 	}
 	return out;
 }
@@ -180,7 +202,7 @@ function printList(): void {
 	for (const p of PRESETS) {
 		const enabled = cfg.servers[p.id]?.enabled !== false && cfg.servers[p.id] !== undefined;
 		const mark = enabled ? "✓" : "·";
-		const auth = p.auth === "oauth" ? "OAuth" : "API key";
+		const auth = { oauth: "OAuth", "api-key": "API key", cli: "local", none: "open" }[p.auth];
 		lines.push(`  ${mark} ${p.id.padEnd(12)} ${p.label.padEnd(24)} ${auth.padEnd(7)} ${p.description}`);
 	}
 	lines.push("", "Enable with: reflex connect <id>", "Remove with: reflex connect remove <id>");

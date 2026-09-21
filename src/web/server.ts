@@ -670,7 +670,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { action: "install" | "remove"; source: string };
 				if (!/^(npm:|git:|https?:\/\/|ssh:\/\/|\/|\.\/)/.test(body.source ?? "")) return json(res, 400, { error: "source must be npm:<pkg>, git:<host/user/repo>, an https URL or a local path" });
 				try {
-					const { stdout, stderr } = await run(process.execPath, [cliPath(), body.action, body.source], { timeout: 180000, env: { ...process.env, PI_TELEMETRY: "0" } });
+					const { stdout, stderr } = await run(process.execPath, [cliPath(), body.action, body.source], { timeout: 300000, env: { ...process.env, PI_TELEMETRY: "0", GIT_TERMINAL_PROMPT: "0" } });
 					return json(res, 200, { ok: true, output: `${stdout}\n${stderr}`.trim() });
 				} catch (err) {
 					const e = err as { stdout?: string; stderr?: string; message: string };
@@ -938,13 +938,13 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				return json(res, 200, { ok: true });
 			}
 			if (url.pathname === "/api/mcp/connect" && req.method === "POST") {
-				const body = JSON.parse((await readBody(req)).toString("utf8")) as { id?: string; readOnly?: boolean; apiKey?: string; connect?: boolean };
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { id?: string; readOnly?: boolean; apiKey?: string; connect?: boolean; fields?: Record<string, string> };
 				try {
 					// Build WITHOUT persisting, then run the live connect (OAuth browser flow for
 					// remotes, or a direct initialize for api-key/http). Only persist to mcp.json
 					// if the connect succeeds — so an aborted OAuth consent never leaves a phantom
 					// "connected" entry, and a retry always starts from a clean cache.
-					const { server, result } = buildPresetConfig(body.id ?? "", { readOnly: body.readOnly, apiKey: body.apiKey, fresh: true });
+					const { server, result } = buildPresetConfig(body.id ?? "", { readOnly: body.readOnly, apiKey: body.apiKey, fresh: true, fields: body.fields });
 					let serverInfo: { name?: string; version?: string } | undefined;
 					let tools: { name: string; description: string }[] | undefined;
 					if (body.connect) {

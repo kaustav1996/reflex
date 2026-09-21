@@ -45,7 +45,9 @@ test("clearOAuthCache is keyed by md5(url) and scoped to mcp-remote dirs", () =>
 test("every preset carries the directory metadata the web UI shows", () => {
 	for (const p of PRESETS) {
 		assert.ok(p.tagline && p.about && p.madeBy.name && p.madeBy.url.startsWith("https://"), p.id);
-		assert.ok((p.auth === "cli" ? p.endpoint.includes("stdio") : p.endpoint.startsWith("https://")) && p.categories.length > 0, p.id);
+		// A local process describes its command; a remote server gives its URL (https, or localhost for a server you run yourself).
+		const local = !!p.build({ apiKey: "k", fields: Object.fromEntries((p.fields ?? []).map((f) => [f.key, "v"])) }).command && p.auth !== "oauth";
+		assert.ok((local ? p.endpoint.includes("stdio") : /^https:\/\/|^http:\/\/localhost[:/]/.test(p.endpoint)) && p.categories.length > 0, p.id);
 	}
 });
 

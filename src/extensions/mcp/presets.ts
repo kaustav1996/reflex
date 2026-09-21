@@ -15,9 +15,19 @@
  * variant that talks streamable-HTTP directly with no browser and no `npx`.
  */
 import type { McpServerConfig } from "./client.js";
+import { ECC_SERVERS, type EccServer } from "./ecc.js";
 
-/** oauth: browser consent via the mcp-remote bridge · api-key: bearer token over streamable HTTP · cli: a local stdio server that reuses a vendor CLI's own login. */
-export type ConnectorAuth = "oauth" | "api-key" | "cli";
+/** oauth: browser consent via the mcp-remote bridge · api-key: a key the user provides · cli: a local stdio server (a vendor CLI's own login, or none) · none: a remote server with no sign-in. */
+export type ConnectorAuth = "oauth" | "api-key" | "cli" | "none";
+
+/** A value a connector needs besides its key (a URL, an email, a folder). Env var unless `arg`. */
+export interface ConnectorField {
+	key: string;
+	label: string;
+	placeholder?: string;
+	/** Substituted for `{{key}}` in the command's arguments instead of set in its environment. */
+	arg?: boolean;
+}
 
 export interface ConnectorPreset {
 	/** Stable id used on the CLI: `reflex connect <id>`. */
@@ -25,7 +35,7 @@ export interface ConnectorPreset {
 	/** Human label. */
 	label: string;
 	/** Grouping for the picker. */
-	category: "Communication" | "Project tracking" | "Mail" | "Productivity" | "Design" | "Fitness" | "Observability" | "Infrastructure" | "Analytics";
+	category: "Communication" | "Project tracking" | "Mail" | "Productivity" | "Design" | "Fitness" | "Observability" | "Infrastructure" | "Analytics" | "Developer tools" | "Search" | "Memory" | "Browser" | "AI media" | "Documentation";
 	/** One-line description of what the connector exposes. */
 	description: string;
 	/** How the user authenticates. */
@@ -54,8 +64,12 @@ export interface ConnectorPreset {
 	readOnlyOption?: boolean;
 	/** A caveat worth showing before connecting (client allow-lists, own OAuth client, beta). */
 	note?: string;
+	/** Values besides the key that the user fills in when connecting. */
+	fields?: ConnectorField[];
+	/** Where the card comes from, when it isn't Reflex's own list (e.g. "ECC"). */
+	source?: string;
 	/** Build the server config. `apiKey` is the user-provided token for `api-key` presets. */
-	build: (opts: { readOnly?: boolean; apiKey?: string }) => McpServerConfig;
+	build: (opts: { readOnly?: boolean; apiKey?: string; fields?: Record<string, string> }) => McpServerConfig;
 }
 
 /** The remote endpoint behind each connector (kept as a constant so tests + help can assert it). */
@@ -168,6 +182,7 @@ export const PRESETS: ConnectorPreset[] = [
 	{
 		id: "atlassian",
 		label: "Atlassian (Jira + Confluence)",
+		method: "OAuth (Jira + Confluence)",
 		category: "Project tracking",
 		description: "Atlassian's official remote MCP server — Jira issues and Confluence pages across your sites.",
 		auth: "oauth",
@@ -432,6 +447,43 @@ export const PRESETS: ConnectorPreset[] = [
 	},
 ];
 
+/** An ECC server row as a connector card. */
+export function eccPreset(e: EccServer): ConnectorPreset {
+	const t = e.transport;
+	const auth: ConnectorAuth = e.keyEnv ? "api-key" : "stdio" in t ? "cli" : "oauth" in t ? "oauth" : "none";
+	const endpoint = "stdio" in t ? `${[t.stdio, ...(t.args ?? [])].join(" ")} (local stdio)` : "oauth" in t ? t.oauth : "open" in t ? t.open : t.http;
+	return {
+		id: e.id,
+		label: e.label,
+		category: e.category,
+		description: e.about,
+		auth,
+		envVar: e.keyEnv,
+		docsUrl: e.docsUrl,
+		tagline: e.tagline,
+		about: e.about,
+		madeBy: e.madeBy,
+		endpoint,
+		categories: [e.category],
+		variantOf: e.variantOf,
+		method: e.method,
+		note: e.note,
+		fields: e.fields,
+		source: "ECC",
+		build: ({ apiKey, fields = {} } = {}) => {
+			if ("stdio" in t) {
+				const args = (t.args ?? []).map((a) => a.replace(/\{\{(\w+)\}\}/g, (_, k: string) => fields[k] ?? ""));
+				return { command: t.stdio, args, ...(t.env ? { env: { ...t.env } } : {}), enabled: true };
+			}
+			if ("oauth" in t) return mcpRemoteBridge(t.oauth);
+			if ("open" in t) return { url: t.open, enabled: true };
+			return { url: t.http, headers: apiKey ? { [t.header]: t.scheme ? `${t.scheme} ${apiKey}` : apiKey } : ({} as Record<string, string>), enabled: true };
+		},
+	};
+}
+
+for (const e of ECC_SERVERS) if (!PRESETS.some((p) => p.id === e.id)) PRESETS.push(eccPreset(e));
+
 export function findPreset(id: string): ConnectorPreset | undefined {
 	return PRESETS.find((p) => p.id === id);
 }
@@ -455,27 +507,20 @@ export interface PresetMeta {
 	method?: string;
 	readOnlyOption?: boolean;
 	note?: string;
+	fields?: ConnectorField[];
+	source?: string;
 	/** How the connection is made, for the detail page. */
 	transport: "mcp-remote bridge (OAuth in your browser)" | "streamable HTTP" | "local stdio";
 }
 
-export const PRESET_META: PresetMeta[] = PRESETS.map(({ id, label, category, description, auth, envVar, docsUrl, tagline, about, madeBy, endpoint, categories, links, variantOf, method, readOnlyOption, note }) => ({
-	id,
-	label,
-	category,
-	description,
-	auth,
-	envVar,
-	docsUrl,
-	tagline,
-	about,
-	madeBy,
-	endpoint,
-	categories,
-	links,
-	variantOf,
-	method,
-	readOnlyOption,
-	note,
-	transport: auth === "oauth" ? "mcp-remote bridge (OAuth in your browser)" : auth === "cli" ? "local stdio" : "streamable HTTP",
-}));
+/** How a preset connects, from the config it builds (a keyed server can still be a local process). */
+function transportOf(p: ConnectorPreset): PresetMeta["transport"] {
+	if (p.auth === "oauth") return "mcp-remote bridge (OAuth in your browser)";
+	return p.build({}).command ? "local stdio" : "streamable HTTP";
+}
+
+export const PRESET_META: PresetMeta[] = PRESETS.map((p) => ({ ...metaOf(p), transport: transportOf(p) }));
+
+function metaOf({ id, label, category, description, auth, envVar, docsUrl, tagline, about, madeBy, endpoint, categories, links, variantOf, method, readOnlyOption, note, fields, source }: ConnectorPreset): Omit<PresetMeta, "transport"> {
+	return { id, label, category, description, auth, envVar, docsUrl, tagline, about, madeBy, endpoint, categories, links, variantOf, method, readOnlyOption, note, fields, source };
+}
