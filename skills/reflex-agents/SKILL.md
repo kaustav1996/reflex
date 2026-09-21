@@ -15,8 +15,9 @@ cron and webhook triggers to fire.
 ## Where things live
 
 ```
-~/.reflex/agents/<id>/agent.json        definition (edit this file, or use the API)
+~/.reflex/agents/<id>/agent.json        definition (change it with create_agent, not by hand)
 ~/.reflex/agents/<id>/runs/<runId>.json run status, input, output, timings
+~/.reflex/agents/<id>/runs/<runId>.state.json   resume checkpoint of a workflow run
 ~/.reflex/agents/<id>/runs/<runId>.events.jsonl   full event log of the run
 ~/.reflex/agents/<id>/sessions/         Pi session files for the runs
 ```
@@ -55,7 +56,11 @@ cron and webhook triggers to fire.
 
 ## Creating and testing an agent (as the coding agent)
 
-1. Create the directory and `agent.json` (ids are lowercase slugs). Or call the local API:
+1. Create or update it with the **`create_agent` tool** (pass the same `id` to update). It writes
+   valid JSON for you. Don't write or patch `agent.json` with `edit`, `write` or shell commands:
+   long shell commands full of quotes and HTML entities break the JSON easily, and an agent whose
+   file doesn't parse disappears from the Agents tab and never runs. Outside a session, the local
+   API does the same:
 
 ```bash
 curl -s -X POST http://127.0.0.1:7331/api/agents -H 'Content-Type: application/json' \
@@ -157,7 +162,13 @@ accuracy, so start strict and tune on real runs:
 
 **Rebuild the menu every time.** Options must reflect what exists now, not what existed when the
 agent was written. A `shell` step that prints JSON exposes it as `<id>.json`; a choice can build
-its options from that list on every execution (static `criteria` stay as escapes):
+its options from that list on every execution (static `criteria` stay as escapes).
+
+Keep that step's stdout JSON: send progress messages to stderr (`echo "fetched 15 issues" >&2`).
+If the command logs a few lines first, the JSON block that ends the output is still read, but
+nothing may follow it. When the command already saves the JSON to a file, point the step at it
+with `"jsonFile": "issues.json"` (relative to the step's folder) and print whatever you like.
+If the JSON is an object that holds the list, use the path to it: `fetch.json.issues`.
 
 ```json
 { "id": "workers", "type": "shell", "run": "cat workers.json" },

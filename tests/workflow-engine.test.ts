@@ -104,3 +104,43 @@ test("an idempotency key finds the run it already produced, but not a failed one
 	assert.equal(findRunByKey("dedupe-test", "hook:failed"), undefined);
 	assert.equal(findRunByKey("dedupe-test", "hook:other"), undefined);
 });
+
+test("a shell step's JSON is read even after log lines, or from jsonFile", async () => {
+	const { parseJsonOutput } = await import("../src/agents/workflow.ts");
+	assert.deepEqual(parseJsonOutput('[{"k":"DO-1"}]'), [{ k: "DO-1" }]);
+	assert.deepEqual(parseJsonOutput('fetching issues…\nwrote 2 issues\n[\n  {"k":"DO-1"},\n  {"k":"DO-2"}\n]\n'), [{ k: "DO-1" }, { k: "DO-2" }], "log lines, then pretty-printed JSON");
+	assert.equal(parseJsonOutput("[1,2]\ndone"), undefined, "nothing may follow the JSON");
+	assert.equal(parseJsonOutput("just text"), undefined);
+
+	const seen: Req[] = [];
+	const dir = mkdtempSync(join(tmpdir(), "reflex-wf-json-"));
+	const r = await runWorkflow(
+		[
+			{ id: "fetch", type: "shell", run: `echo "fetching…"; echo '[{"key":"DO-1","rel":2}]' | tee issues.json`, cwd: dir },
+			{ id: "fromfile", type: "shell", run: `echo "log only"; echo '{"issues":[{"key":"DO-9"}]}' > wrapped.json`, cwd: dir, jsonFile: "wrapped.json" },
+			{ id: "pick", type: "decide", forEach: { from: "fetch.json", id: "{{item.key}}", question: { type: "score", instructions: "relevant?", criteria: ["no", "maybe", "yes"] } } },
+			{ id: "done", type: "end", output: "{{fromfile.json.issues.0.key}}" },
+		] as never,
+		{},
+		hooks(seen, { jev: fakeJev(seen) }) as never,
+	);
+	assert.equal(r.status, "succeeded", r.error);
+	assert.equal(r.output, "DO-9");
+});
+
+test("a list path that isn't a list says why and how to fix the step", async () => {
+	const seen: Req[] = [];
+	const r = await runWorkflow(
+		[
+			{ id: "fetch", type: "shell", run: `echo "=== Fetching Jira ==="; echo 'not json'` },
+			{ id: "pick", type: "decide", forEach: { from: "fetch.json", id: "{{item}}", question: { type: "noul", instructions: "x" } } },
+		] as never,
+		{},
+		hooks(seen, { jev: fakeJev(seen) }) as never,
+	);
+	assert.equal(r.status, "failed");
+	assert.match(r.error ?? "", /printed no JSON.*stdout starts: "=== Fetching Jira/);
+	assert.match(r.error ?? "", /stderr|jsonFile/);
+	const { notAListReason } = await import("../src/agents/workflow.ts");
+	assert.match(notAListReason("fetch.json", { fetch: { stdout: "{}", json: { issues: [] } } }), /did you mean fetch\.json\.issues/);
+});

@@ -8,6 +8,8 @@
  * Routing is data, not code: `route: [{ when: "verdict.severity.score >= 2", next: "escalate" }]`.
  */
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { createKeyResolver, loadDotEnv, loadReflexConfig } from "../config.js";
 import type { Question } from "../extensions/typesafe/client.js";
 import { createJevClient } from "../extensions/typesafe/provider.js";
@@ -33,6 +35,45 @@ export interface ShellStep extends StepBase {
 	timeoutSec?: number;
 	/** Continue even when the exit code is non-zero (then route on `<as>.ok`). */
 	allowFailure?: boolean;
+	/** Read `<as>.json` from this file (relative to the step's folder) instead of from stdout. */
+	jsonFile?: string;
+}
+
+/**
+ * The JSON a command printed. Pure JSON stdout is the normal case; a command that logs a few lines
+ * and then prints its JSON is common enough to accept too: the JSON block that ends the output
+ * (starting at the last line that begins with `[` or `{` and parses through to the end) wins.
+ */
+export function parseJsonOutput(stdout: string): unknown {
+	const text = stdout.trim();
+	if (!text) return undefined;
+	try {
+		return JSON.parse(text);
+	} catch {}
+	const lines = text.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (!/^\s*[[{]/.test(lines[i])) continue;
+		try {
+			return JSON.parse(lines.slice(i).join("\n"));
+		} catch {}
+	}
+	return undefined;
+}
+
+/** Why `path` didn't resolve to a list, in words that say how to fix the step that produced it. */
+export function notAListReason(path: string, vars: Record<string, unknown>): string {
+	const [head, second] = path.split(".");
+	const v = vars[head] as { stdout?: string; json?: unknown } | undefined;
+	if (second === "json" && v && typeof v === "object" && "stdout" in v && v.json === undefined) {
+		const start = (v.stdout ?? "").trim().slice(0, 120).replace(/\s+/g, " ");
+		return `step "${head}" printed no JSON that could be read (stdout starts: "${start || "(empty)"}"). Print only the JSON to stdout and send logs to stderr (>&2), or set jsonFile on that step to read it from a file`;
+	}
+	const got = getPath(vars, path);
+	if (got && typeof got === "object" && !Array.isArray(got)) {
+		const lists = Object.entries(got as Record<string, unknown>).filter(([, x]) => Array.isArray(x)).map(([k]) => `${path}.${k}`);
+		if (lists.length) return `it is an object; did you mean ${lists.join(" or ")}?`;
+	}
+	return `got ${got === undefined ? "nothing" : Array.isArray(got) ? "a list" : typeof got}`;
 }
 /**
  * A decide question. Instructions and criteria are templates, rendered every time the step runs.
@@ -227,7 +268,7 @@ export function buildQuestion(q: DecideQuestion, vars: Vars): Question {
 	const rendered = renderDeep(rest, vars) as Question;
 	if (!optionsFrom || rendered.type !== "choice") return rendered;
 	const list = getPath(vars, optionsFrom);
-	if (!Array.isArray(list)) throw new Error(`optionsFrom "${optionsFrom}" is not a list (got ${list === undefined ? "nothing" : typeof list})`);
+	if (!Array.isArray(list)) throw new Error(`optionsFrom "${optionsFrom}" is not a list: ${notAListReason(optionsFrom, vars)}`);
 	const generated: Record<string, unknown> = {};
 	list.slice(0, 250).forEach((item, idx) => {
 		const o = (typeof item === "object" && item ? item : {}) as Record<string, unknown>;
@@ -273,9 +314,18 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					const r = await sh(cmd, step.cwd ? render(step.cwd, vars) : hooks.cwd, (step.timeoutSec ?? 300) * 1000, hooks.signal);
 					// A command that prints JSON makes it available as `<as>.json` (lists feed optionsFrom / forEach).
 					let parsed: unknown;
-					try {
-						parsed = JSON.parse(r.stdout);
-					} catch {}
+					if (step.jsonFile) {
+						const dir = step.cwd ? render(step.cwd, vars) : hooks.cwd;
+						const file = render(step.jsonFile, vars);
+						try {
+							parsed = JSON.parse(readFileSync(isAbsolute(file) ? file : join(dir, file), "utf8"));
+						} catch (err) {
+							if (r.ok) {
+								emitEnd(false, r);
+								return { status: "failed", vars, output: lastOutput, error: `${id}: jsonFile ${file} could not be read as JSON: ${err instanceof Error ? err.message : err}` };
+							}
+						}
+					} else parsed = parseJsonOutput(r.stdout);
 					vars[as] = parsed === undefined ? r : { ...r, json: parsed };
 					lastOutput = r.stdout.trim() || lastOutput;
 					if (!r.ok && !step.allowFailure && !step.route?.length) {
@@ -298,7 +348,7 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					const itemKeys: string[] = [];
 					if (step.forEach) {
 						const list = getPath(vars, step.forEach.from);
-						if (!Array.isArray(list)) throw new Error(`forEach.from "${step.forEach.from}" is not a list`);
+						if (!Array.isArray(list)) throw new Error(`forEach.from "${step.forEach.from}" is not a list: ${notAListReason(step.forEach.from, vars)}`);
 						items = list.slice(0, FOREACH_MAX);
 						items.forEach((item, idx) => itemKeys.push(`item_${idx}`));
 					}

@@ -15,6 +15,7 @@ import { createSecretsExtension } from "./secrets/index.js";
 import { createTypesafeExtension } from "./typesafe/index.js";
 import type { ReflexState } from "./typesafe/state.js";
 import { createUiExtension } from "./ui/header.js";
+import { createFormatExtension } from "./ui/format.js";
 import { createModelsExtension } from "./ui/models.js";
 import { createPresenceExtension } from "./ui/presence.js";
 import { createVoiceExtension } from "./voice/index.js";
@@ -35,6 +36,7 @@ export function createReflexExtensions(config: ReflexConfig): InlineExtension[] 
 		{ name: "reflex-logs", factory: createLogsExtension(), hidden: true },
 		{ name: "reflex-models", factory: createModelsExtension(), hidden: true },
 		{ name: "reflex-presence", factory: createPresenceExtension(), hidden: true },
+		{ name: "reflex-format", factory: createFormatExtension(), hidden: true },
 		{
 			name: "reflex-typesafe",
 			factory: (pi: ExtensionAPI) => {

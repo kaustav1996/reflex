@@ -32,7 +32,7 @@ import { cleanTitle } from "./titles.js";
 import { describeCron, parseCron } from "../agents/cron.js";
 import { attachRunListener, cancelRun, getLiveRun, liveRunsForAgent, resumeRun, runAgent } from "../agents/runner.js";
 import { startScheduler } from "../agents/scheduler.js";
-import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listRuns, loadAgent, loadRun, runLogPath, saveAgent, findRunByKey, loadCheckpoint } from "../agents/store.js";
+import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listBrokenAgents, listRuns, loadAgent, loadRun, runLogPath, saveAgent, findRunByKey, loadCheckpoint } from "../agents/store.js";
 import { getReflexHome, loadReflexConfig as loadCfg, saveReflexConfig, SERVICE_ENV, storeKey } from "../config.js";
 import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/client.js";
 import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
@@ -518,7 +518,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			// ── Agents ───────────────────────────────────────────────────────
 			if (url.pathname === "/api/agents" && req.method === "GET") {
 				const agents = listAgents().map((a) => ({ ...a, running: liveRunsForAgent(a.id).length, lastRun: listRuns(a.id, 1)[0] ?? null, triggersInfo: a.triggers.map((t) => (t.type === "cron" ? { ...t, next: describeCron(t.schedule) } : t.type === "webhook" ? { ...t, url: `http://127.0.0.1:${port}/hooks/${a.id}/${t.secret}` } : t)) }));
-				return json(res, 200, { agents });
+				return json(res, 200, { agents, broken: listBrokenAgents() });
 			}
 			if (url.pathname === "/api/agents/diagram" && req.method === "POST") {
 				// Preview: diagram for an unsaved agent definition (the editor form).
