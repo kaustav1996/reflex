@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reflex</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 28 28%27%3E%3Crect x=%271.5%27 y=%271.5%27 width=%2725%27 height=%2725%27 fill=%27%23f386a1%27 stroke=%27%231e1e1e%27 stroke-width=%273%27/%3E%3Cpath d=%27M15.5 4 L8 15.5 H14 L12.5 24 L20 12.5 H14 Z%27 fill=%27%231e1e1e%27/%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
 <style>
   :root {
     --paper: #fefefe; --ink: #1e1e1e; --ink-soft: #1e1e1edb; --line: #1e1e1e;
@@ -29,6 +29,463 @@
     --paper: #f3f3f3; --ink: #0a0a0a; --ink-soft: #0a0a0adb; --line: #272727; --light: #e3e3e3;
     --pink: #5a7a74; --magenta: #0a9f72; --teal: #0a9f72; --green: #0a9f72; --mist: #6b7f7c; --gray: #676767;
     --user-bg: #ffffff; --tool-bg: #f9f9f9; --tool-ok: #e6f5ec; --tool-err: #fbe6e6; --reflex-bg: #e8f0ee;
+  }
+
+  :root[data-theme="apple"] {
+    --paper: #000000; --ink: #f5f5f7; --ink-soft: #f5f5f7cc; --line: #3a3a3c; --light: #2c2c2e;
+    --pink: #0A84FF; --magenta: #0A84FF; --teal: #64D2FF; --green: #30D158; --mist: #98989d; --gray: #8E8E93;
+    --user-bg: #1c1c1e; --tool-bg: #2c2c2e; --tool-ok: #0d2818; --tool-err: #3a1212; --reflex-bg: #0a84ff22;
+  }
+  :root[data-theme="apple-light"] {
+    --paper: #f2f2f7; --ink: #1c1c1e; --ink-soft: #1c1c1ecc; --line: #c7c7cc; --light: #e5e5ea;
+    --pink: #007AFF; --magenta: #007AFF; --teal: #32ADE6; --green: #34C759; --mist: #8E8E93; --gray: #8E8E93;
+    --user-bg: #ffffff; --tool-bg: #ffffff; --tool-ok: #e8f8ee; --tool-err: #fdecea; --reflex-bg: #007aff18;
+  }
+
+  /* —— Wafer chrome: frosted round glass, geometric sans, pixel backdrop (wafer.ai) —— */
+  :root[data-theme="wafer"],
+  :root[data-theme="wafer-light"] {
+    --wafer-radius: 16px;
+    --wafer-radius-sm: 10px;
+    --wafer-glass: rgba(255,255,255,0.08);
+    --wafer-glass-strong: rgba(255,255,255,0.12);
+    --wafer-stroke: rgba(255,255,255,0.18);
+    --wafer-shadow: 0 2px 40px rgba(0,0,0,0.35);
+    --wafer-blur: 18px;
+    --font-ui: "Space Grotesk", "DM Sans", system-ui, sans-serif;
+    --font-display: "DM Sans", "Space Grotesk", system-ui, sans-serif;
+    --font-mono: "Space Mono", "JetBrains Mono", ui-monospace, monospace;
+  }
+  :root[data-theme="wafer-light"] {
+    --wafer-glass: rgba(255,255,255,0.55);
+    --wafer-glass-strong: rgba(255,255,255,0.72);
+    --wafer-stroke: rgba(0,0,0,0.12);
+    --wafer-shadow: 0 2px 36px rgba(0,0,0,0.08);
+  }
+  :root[data-theme="wafer"] body {
+    font-family: var(--font-ui);
+    letter-spacing: -0.02em;
+    background-color: #0a0a0a;
+    background-image:
+      url("data:image/png;base64,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"),
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(89,242,189,0.14), transparent 55%),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgba(149,171,167,0.10), transparent 50%);
+    background-size: 180px 180px, auto, auto;
+    background-repeat: repeat, no-repeat, no-repeat;
+    image-rendering: pixelated;
+  }
+  :root[data-theme="wafer-light"] body {
+    font-family: var(--font-ui);
+    letter-spacing: -0.02em;
+    background-color: #eee;
+    background-image:
+      url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAADVklEQVR4nO2b0a6rIBBF+f9vtVatPHuzm7uSyQSKoM05J/BgioOsTg1sYUvDNE3HsizHuq6Hyvu+H4/H45jn+di27R17vV7vcx0qK6brn8/n+1q1IWY5sC0HNhzLthyxVY4xHrkcPdvnqLpSjkEQNdChsoJ8GWXV0VAJEdMXqGxjnqNzypZt27Sydc2VHGOMR1ADgvxoYpT1KZAONaJe53zhWQ4x2sD2nBZ2bY5RN6D7IbDv+2EP3RUfK9W3xO7iXM0xICbqEoiFhIQxphgCI0FByBhbiJdijEE4Vqg8G44XQctWWUmm2LkcPbuUY9CPYuyorKA+GS/8aJ0jQDZm26Q4Oodj2Z6TY+sGXM3RxiwnqgegpIiI/dQFNoZ4+Tap2CfON9k1nDhEcD8CjxId3D0f88Jxpk0p5uuvsls5QQKhcaIugVggiggLYsJYYpaoa1QWiJjlwIZj2dTDZkzm2Gdz9OxSjgFlLCm1EkSAiAG36m05sL3icyMt23Jg+6fAN3IMqa6U6qbMoGq6ZI7zTXbtkAzdzwS3/48O/4jxMXt3baz0qMqxPafE/kaOUT2A2ZRfaTF2iTGDor5mxZZi167iUhwfq80x5oYA097UWlv1rLWZrtb4AbCp/8S2foBn26nwlRwDQsJiwX76WKn+SuynOKF7EVx7N0TW3m/A1Lspuv9hwfOxljah+x6w9G6Lb8MRmoYI7sMWX/q1xecTVlbKEkN0WNjkOKzYPNtycuwau60lxygRHI7Q1LkIbiednBa35RO71hFKcXysyRGahy3+6NsW33/BIuZO9lgMzQ0i+DphOefE6w5b/Az7GznGYYvH4QcEhKTXI3Q/E1wzjiuCcbdzC5s2d7JrOXHY4nEMgWDdID+jSh2p+pbYXZyrOYaxUfLZtgkR8cltQrQxOJZNOcW2Ts7dGyURxrFRchsbJY/3Ysh7gupyKZ/QCseZNqWYr7/KbuWE7h2hOWGJWbeF9bVEI2ddEztjXVtHyLKtdd1qi9fmGIctHsdMMJx1W1qt67OuzR3sJlt86X2j5CPznyFmXznruuXlKILlrescu/blaMoWL74c3YctPvX9bnBNuC1WYFr34NE2xUGorrBzOVr2cIReY6PkURwC8RdY0z9pi/8DdrdF52YUNZ8AAAAASUVORK5CYII="),
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(10,159,114,0.10), transparent 55%);
+    background-size: 180px 180px, auto;
+    background-repeat: repeat, no-repeat;
+    image-rendering: pixelated;
+  }
+  :root[data-theme="wafer"] .win,
+  :root[data-theme="wafer-light"] .win {
+    border: 1px solid var(--wafer-stroke);
+    border-radius: var(--wafer-radius);
+    background: var(--wafer-glass);
+    backdrop-filter: blur(var(--wafer-blur)) saturate(1.2);
+    -webkit-backdrop-filter: blur(var(--wafer-blur)) saturate(1.2);
+    box-shadow: var(--wafer-shadow);
+    overflow: hidden;
+  }
+  :root[data-theme="wafer"] .titlebar,
+  :root[data-theme="wafer-light"] .titlebar {
+    border-bottom: 1px solid var(--wafer-stroke);
+    background: linear-gradient(180deg, var(--wafer-glass-strong), transparent);
+    border-radius: var(--wafer-radius) var(--wafer-radius) 0 0;
+  }
+  :root[data-theme="wafer"] .titlebar .tag,
+  :root[data-theme="wafer-light"] .titlebar .tag {
+    background: transparent;
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+  }
+  :root[data-theme="wafer"] .titlebar .tag.pink,
+  :root[data-theme="wafer-light"] .titlebar .tag.pink {
+    background: color-mix(in srgb, var(--pink) 35%, transparent);
+    color: var(--ink);
+    border: 1px solid color-mix(in srgb, var(--pink) 55%, transparent);
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+  :root[data-theme="wafer"] .titlebar .btn,
+  :root[data-theme="wafer-light"] .titlebar .btn {
+    border-radius: 999px;
+    border: 1px solid var(--wafer-stroke);
+    background: var(--wafer-glass);
+    backdrop-filter: blur(12px);
+  }
+  :root[data-theme="wafer"] .titlebar .btn:hover,
+  :root[data-theme="wafer-light"] .titlebar .btn:hover {
+    background: color-mix(in srgb, var(--pink) 40%, transparent);
+    color: var(--ink);
+  }
+  :root[data-theme="wafer"] .sess,
+  :root[data-theme="wafer-light"] .sess {
+    border-radius: var(--wafer-radius-sm);
+  }
+  :root[data-theme="wafer"] .sess.active,
+  :root[data-theme="wafer-light"] .sess.active {
+    background: color-mix(in srgb, var(--pink) 45%, transparent);
+    color: var(--ink);
+    border-color: color-mix(in srgb, var(--pink) 60%, transparent);
+  }
+  :root[data-theme="wafer"] .card,
+  :root[data-theme="wafer-light"] .card,
+  :root[data-theme="wafer"] .dialog,
+  :root[data-theme="wafer-light"] .dialog,
+  :root[data-theme="wafer"] #slash.show,
+  :root[data-theme="wafer-light"] #slash.show {
+    border: 1px solid var(--wafer-stroke);
+    border-radius: var(--wafer-radius);
+    background: var(--wafer-glass-strong);
+    backdrop-filter: blur(var(--wafer-blur));
+    -webkit-backdrop-filter: blur(var(--wafer-blur));
+    box-shadow: var(--wafer-shadow);
+  }
+  :root[data-theme="wafer"] .tgroup,
+  :root[data-theme="wafer-light"] .tgroup,
+  :root[data-theme="wafer"] .tool,
+  :root[data-theme="wafer-light"] .tool,
+  :root[data-theme="wafer"] .msg.user,
+  :root[data-theme="wafer-light"] .msg.user {
+    border-radius: var(--wafer-radius-sm);
+    border: 1px solid var(--wafer-stroke);
+    background: var(--wafer-glass);
+    backdrop-filter: blur(10px);
+  }
+  :root[data-theme="wafer"] button.b,
+  :root[data-theme="wafer-light"] button.b {
+    border-radius: 999px;
+    border: 1px solid var(--wafer-stroke);
+    box-shadow: none;
+    background: var(--wafer-glass-strong);
+    backdrop-filter: blur(12px);
+    font-family: var(--font-ui);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  :root[data-theme="wafer"] button.b.primary,
+  :root[data-theme="wafer-light"] button.b.primary {
+    background: color-mix(in srgb, var(--magenta) 55%, var(--wafer-glass-strong));
+    border-color: color-mix(in srgb, var(--magenta) 70%, transparent);
+    color: var(--ink);
+  }
+  :root[data-theme="wafer"] button.b:active,
+  :root[data-theme="wafer-light"] button.b:active {
+    transform: translateY(1px);
+  }
+  :root[data-theme="wafer"] #input,
+  :root[data-theme="wafer-light"] #input,
+  :root[data-theme="wafer"] .form input,
+  :root[data-theme="wafer-light"] .form input,
+  :root[data-theme="wafer"] .form textarea,
+  :root[data-theme="wafer-light"] .form textarea,
+  :root[data-theme="wafer"] .form select,
+  :root[data-theme="wafer-light"] .form select {
+    border-radius: var(--wafer-radius-sm);
+    border: 1px solid var(--wafer-stroke);
+    background: var(--wafer-glass);
+    backdrop-filter: blur(10px);
+    font-family: var(--font-ui);
+  }
+  :root[data-theme="wafer"] #composer,
+  :root[data-theme="wafer-light"] #composer,
+  :root[data-theme="wafer"] #status,
+  :root[data-theme="wafer-light"] #status,
+  :root[data-theme="wafer"] .side-foot,
+  :root[data-theme="wafer-light"] .side-foot {
+    border-color: var(--wafer-stroke);
+    background: linear-gradient(0deg, var(--wafer-glass-strong), transparent);
+  }
+  :root[data-theme="wafer"] .tabs button.on,
+  :root[data-theme="wafer-light"] .tabs button.on {
+    background: color-mix(in srgb, var(--pink) 40%, transparent);
+    color: var(--ink);
+    border-radius: 8px 8px 0 0;
+  }
+  :root[data-theme="wafer"] .sec,
+  :root[data-theme="wafer-light"] .sec,
+  :root[data-theme="wafer"] .card h3,
+  :root[data-theme="wafer-light"] .card h3 {
+    font-family: var(--font-mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-size: 10px;
+  }
+  :root[data-theme="wafer"] .msg.assistant,
+  :root[data-theme="wafer-light"] .msg.assistant {
+    font-family: var(--font-ui);
+  }
+  :root[data-theme="wafer"] .msg.assistant.md code,
+  :root[data-theme="wafer-light"] .msg.assistant.md code,
+  :root[data-theme="wafer"] .msg.assistant.md pre,
+  :root[data-theme="wafer-light"] .msg.assistant.md pre {
+    font-family: var(--font-mono);
+    border-radius: 8px;
+  }
+  :root[data-theme="wafer"] .conn-card,
+  :root[data-theme="wafer-light"] .conn-card {
+    border-radius: var(--wafer-radius-sm);
+    background: var(--wafer-glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--wafer-stroke);
+    box-shadow: none;
+  }
+  :root[data-theme="wafer"] .conn-card:hover,
+  :root[data-theme="wafer-light"] .conn-card:hover {
+    border-color: color-mix(in srgb, var(--pink) 70%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pink) 40%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :root[data-theme="wafer"] .win,
+    :root[data-theme="wafer-light"] .win {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: color-mix(in srgb, var(--paper) 88%, var(--ink));
+    }
+  }
+
+  /* —— Apple / Liquid Glass (dickwu/apple-design-skill · HIG materials) ——
+     Glass only on the functional layer (titlebar, sidebar chrome, composer, sheets).
+     Content stays opaque standard materials. System blue accent, SF-style type. */
+  :root[data-theme="apple"],
+  :root[data-theme="apple-light"] {
+    --apple-radius: 12px;
+    --apple-radius-sm: 8px;
+    --apple-blur: 28px;
+    --apple-sat: 1.4;
+    --apple-glass: rgba(28,28,30,0.72);
+    --apple-glass-clear: rgba(28,28,30,0.45);
+    --apple-stroke: rgba(255,255,255,0.18);
+    --apple-hairline: rgba(255,255,255,0.28);
+    --apple-shadow: 0 8px 32px rgba(0,0,0,0.45);
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, "JetBrains Mono", monospace;
+  }
+  :root[data-theme="apple-light"] {
+    --apple-glass: rgba(255,255,255,0.72);
+    --apple-glass-clear: rgba(255,255,255,0.55);
+    --apple-stroke: rgba(0,0,0,0.12);
+    --apple-hairline: rgba(255,255,255,0.85);
+    --apple-shadow: 0 8px 28px rgba(0,0,0,0.12);
+  }
+  :root[data-theme="apple"] body,
+  :root[data-theme="apple-light"] body {
+    font-family: var(--font-ui);
+    letter-spacing: -0.015em;
+    background-image: none;
+    image-rendering: auto;
+  }
+  :root[data-theme="apple"] body {
+    background:
+      radial-gradient(ellipse 70% 50% at 20% 0%, rgba(10,132,255,0.22), transparent 55%),
+      radial-gradient(ellipse 60% 45% at 90% 100%, rgba(100,210,255,0.12), transparent 50%),
+      #000000;
+  }
+  :root[data-theme="apple-light"] body {
+    background:
+      radial-gradient(ellipse 70% 50% at 15% 0%, rgba(0,122,255,0.12), transparent 55%),
+      radial-gradient(ellipse 50% 40% at 100% 100%, rgba(50,173,230,0.10), transparent 50%),
+      #f2f2f7;
+  }
+  /* Window shell: soft rounded, light chrome — not content glass */
+  :root[data-theme="apple"] .win,
+  :root[data-theme="apple-light"] .win {
+    border: 1px solid var(--apple-stroke);
+    border-radius: var(--apple-radius);
+    background: color-mix(in srgb, var(--paper) 92%, transparent);
+    box-shadow: var(--apple-shadow);
+    overflow: hidden;
+  }
+  /* Functional glass: titlebar */
+  :root[data-theme="apple"] .titlebar,
+  :root[data-theme="apple-light"] .titlebar {
+    border-bottom: 1px solid var(--apple-stroke);
+    background: var(--apple-glass);
+    backdrop-filter: blur(var(--apple-blur)) saturate(var(--apple-sat));
+    -webkit-backdrop-filter: blur(var(--apple-blur)) saturate(var(--apple-sat));
+    border-radius: var(--apple-radius) var(--apple-radius) 0 0;
+    box-shadow: inset 0 1px 0 var(--apple-hairline);
+  }
+  :root[data-theme="apple"] .titlebar .tag,
+  :root[data-theme="apple-light"] .titlebar .tag {
+    background: transparent;
+    font-family: var(--font-ui);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  :root[data-theme="apple"] .titlebar .tag.pink,
+  :root[data-theme="apple-light"] .titlebar .tag.pink {
+    background: var(--pink);
+    color: #fff;
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+  :root[data-theme="apple"] .titlebar .btn,
+  :root[data-theme="apple-light"] .titlebar .btn {
+    border-radius: 999px;
+    border: 1px solid var(--apple-stroke);
+    background: var(--apple-glass-clear);
+    backdrop-filter: blur(16px);
+  }
+  :root[data-theme="apple"] .titlebar .btn:hover,
+  :root[data-theme="apple-light"] .titlebar .btn:hover {
+    background: color-mix(in srgb, var(--pink) 35%, transparent);
+    color: var(--ink);
+  }
+  /* Sidebar sessions — content-ish: opaque materials, not glass */
+  :root[data-theme="apple"] .sess,
+  :root[data-theme="apple-light"] .sess {
+    border-radius: var(--apple-radius-sm);
+  }
+  :root[data-theme="apple"] .sess.active,
+  :root[data-theme="apple-light"] .sess.active {
+    background: color-mix(in srgb, var(--pink) 28%, transparent);
+    color: var(--ink);
+    border-color: transparent;
+  }
+  /* Sheets / dialogs / slash — functional glass */
+  :root[data-theme="apple"] .dialog,
+  :root[data-theme="apple-light"] .dialog,
+  :root[data-theme="apple"] #slash.show,
+  :root[data-theme="apple-light"] #slash.show {
+    border: 1px solid var(--apple-stroke);
+    border-radius: var(--apple-radius);
+    background: var(--apple-glass);
+    backdrop-filter: blur(var(--apple-blur)) saturate(var(--apple-sat));
+    -webkit-backdrop-filter: blur(var(--apple-blur)) saturate(var(--apple-sat));
+    box-shadow: var(--apple-shadow), inset 0 1px 0 var(--apple-hairline);
+  }
+  /* Settings cards & messages — opaque content materials */
+  :root[data-theme="apple"] .card,
+  :root[data-theme="apple-light"] .card,
+  :root[data-theme="apple"] .tgroup,
+  :root[data-theme="apple-light"] .tgroup,
+  :root[data-theme="apple"] .tool,
+  :root[data-theme="apple-light"] .tool,
+  :root[data-theme="apple"] .msg.user,
+  :root[data-theme="apple-light"] .msg.user,
+  :root[data-theme="apple"] .conn-card,
+  :root[data-theme="apple-light"] .conn-card {
+    border-radius: var(--apple-radius-sm);
+    border: 1px solid var(--apple-stroke);
+    background: var(--user-bg);
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+  :root[data-theme="apple"] button.b,
+  :root[data-theme="apple-light"] button.b {
+    border-radius: 999px;
+    border: 1px solid var(--apple-stroke);
+    box-shadow: none;
+    background: var(--apple-glass-clear);
+    backdrop-filter: blur(12px);
+    font-family: var(--font-ui);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  :root[data-theme="apple"] button.b.primary,
+  :root[data-theme="apple-light"] button.b.primary {
+    background: var(--pink);
+    border-color: var(--pink);
+    color: #fff;
+    backdrop-filter: none;
+  }
+  :root[data-theme="apple"] button.b:active,
+  :root[data-theme="apple-light"] button.b:active {
+    transform: scale(0.98);
+  }
+  :root[data-theme="apple"] #input,
+  :root[data-theme="apple-light"] #input,
+  :root[data-theme="apple"] .form input,
+  :root[data-theme="apple-light"] .form input,
+  :root[data-theme="apple"] .form textarea,
+  :root[data-theme="apple-light"] .form textarea,
+  :root[data-theme="apple"] .form select,
+  :root[data-theme="apple-light"] .form select {
+    border-radius: var(--apple-radius-sm);
+    border: 1px solid var(--apple-stroke);
+    background: var(--user-bg);
+    font-family: var(--font-ui);
+  }
+  /* Composer / status / side foot — functional glass */
+  :root[data-theme="apple"] #composer,
+  :root[data-theme="apple-light"] #composer,
+  :root[data-theme="apple"] #status,
+  :root[data-theme="apple-light"] #status,
+  :root[data-theme="apple"] .side-foot,
+  :root[data-theme="apple-light"] .side-foot {
+    border-color: var(--apple-stroke);
+    background: var(--apple-glass);
+    backdrop-filter: blur(var(--apple-blur)) saturate(var(--apple-sat));
+    -webkit-backdrop-filter: blur(var(--apple-blur)) saturate(var(--apple-sat));
+  }
+  :root[data-theme="apple"] .tabs button.on,
+  :root[data-theme="apple-light"] .tabs button.on {
+    background: color-mix(in srgb, var(--pink) 22%, transparent);
+    color: var(--ink);
+    border-radius: 8px 8px 0 0;
+  }
+  :root[data-theme="apple"] .sec,
+  :root[data-theme="apple-light"] .sec,
+  :root[data-theme="apple"] .card h3,
+  :root[data-theme="apple-light"] .card h3 {
+    font-family: var(--font-ui);
+    letter-spacing: -0.02em;
+    text-transform: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  :root[data-theme="apple"] .msg.assistant,
+  :root[data-theme="apple-light"] .msg.assistant {
+    font-family: var(--font-ui);
+  }
+  :root[data-theme="apple"] .msg.assistant.md code,
+  :root[data-theme="apple-light"] .msg.assistant.md code,
+  :root[data-theme="apple"] .msg.assistant.md pre,
+  :root[data-theme="apple-light"] .msg.assistant.md pre {
+    font-family: var(--font-mono);
+    border-radius: 8px;
+  }
+  :root[data-theme="apple"] .conn-card:hover,
+  :root[data-theme="apple-light"] .conn-card:hover {
+    border-color: color-mix(in srgb, var(--pink) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pink) 20%, transparent);
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    :root[data-theme="apple"] .titlebar,
+    :root[data-theme="apple-light"] .titlebar,
+    :root[data-theme="apple"] .dialog,
+    :root[data-theme="apple-light"] .dialog,
+    :root[data-theme="apple"] #slash.show,
+    :root[data-theme="apple-light"] #slash.show,
+    :root[data-theme="apple"] #composer,
+    :root[data-theme="apple-light"] #composer,
+    :root[data-theme="apple"] #status,
+    :root[data-theme="apple-light"] #status,
+    :root[data-theme="apple"] .side-foot,
+    :root[data-theme="apple-light"] .side-foot,
+    :root[data-theme="apple"] button.b,
+    :root[data-theme="apple-light"] button.b {
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      background: var(--user-bg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :root[data-theme="apple"] button.b:active,
+    :root[data-theme="apple-light"] button.b:active {
+      transform: none;
+    }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -742,7 +1199,7 @@ function applyWebTheme(t) {
 $("#themeBtn").onclick = () => {
   const r = document.documentElement;
   const cur = r.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  const next = cur === "wafer" ? "wafer-light" : cur === "wafer-light" ? "wafer" : cur === "dark" ? "light" : "dark";
+  const next = cur === "wafer" ? "wafer-light" : cur === "wafer-light" ? "wafer" : cur === "apple" ? "apple-light" : cur === "apple-light" ? "apple" : cur === "dark" ? "light" : "dark";
   applyWebTheme(next);
   const sel = document.getElementById("webTheme"); if (sel) sel.value = next;
 };
@@ -998,7 +1455,7 @@ async function loadSettings() {
       <label>protected paths</label><input data-cfg="reflex.protectedPaths" value="${esc(c.reflex.protectedPaths.join(", "))}"></div></div>
     <div class="card" id="s-voice"><h3>Voice</h3><div class="form">${keyRow("sarvam", "Sarvam key")}${keyRow("deepgram", "Deepgram key")}<label>OpenAI / Groq</label><div class="muted" style="padding-top:6px">OpenAI ${d.keys.openai ? "✓ " + esc(d.keys.openai) : "not set"} · Groq ${d.keys.groq ? "✓ " + esc(d.keys.groq) : "not set"} · voice reuses the keys from System 2 · LLM</div><label>provider</label>${opt("voice.provider", c.voice.provider, ["sarvam", "openai", "groq", "deepgram", "whisper-cpp", "none"])}<label>language</label><input data-cfg="voice.language" value="${esc(c.voice.language)}" placeholder="unknown · en-IN · hi-IN"><label>translate to English</label>${opt("voice.translateToEnglish", c.voice.translateToEnglish, [false, true])}<label>shortcut (TUI)</label><input data-cfg="voice.shortcut" value="${esc(c.voice.shortcut)}"></div></div>
     <div class="card" id="s-browser"><h3>Browser agent</h3><div class="form"><label>headless</label>${opt("browser.headless", c.browser.headless, [false, true])}<label>attach to Chrome</label><input data-cfg="browser.attachUrl" value="${esc(c.browser.attachUrl || "")}" placeholder="http://127.0.0.1:9222 (your own Chrome with --remote-debugging-port)"><label>text model</label><input data-cfg="browser.textModel" value="${esc(c.browser.textModel || "")}" placeholder="default: session model"><label>max steps</label><input data-cfg="browser.maxSteps" type="number" value="${c.browser.maxSteps}" style="width:90px"></div></div>
-    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>Web theme</label><div><select id="webTheme">${[["system","System (light/dark)"],["light","Light"],["dark","Dark"],["wafer","Wafer"],["wafer-light","Wafer light"]].map(([v,l]) => `<option value="${v}" ${(document.documentElement.dataset.theme || "system") === v ? "selected" : ""}>${l}</option>`).join("")}</select><div class="muted">Browser-only. Saved in localStorage; ◐ still flips light↔dark or Wafer↔Wafer light.</div></div><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light", "wafer", "wafer-light"])}</div><div class="hint">TUI themes install into ~/.reflex/agent/themes. The default model moved to System 2 · LLM.</div></div>
+    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>Web theme</label><div><select id="webTheme">${[["system","System (light/dark)"],["light","Light"],["dark","Dark"],["wafer","Wafer"],["wafer-light","Wafer light"],["apple","Apple"],["apple-light","Apple light"]].map(([v,l]) => `<option value="${v}" ${(document.documentElement.dataset.theme || "system") === v ? "selected" : ""}>${l}</option>`).join("")}</select><div class="muted">Browser-only. Saved in localStorage; ◐ still flips light↔dark, Wafer↔Wafer light, or Apple↔Apple light.</div></div><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light", "wafer", "wafer-light", "apple", "apple-light"])}</div><div class="hint">TUI themes install into ~/.reflex/agent/themes. The default model moved to System 2 · LLM.</div></div>
     <div class="rowbtns" id="sSaveRow"><button class="b primary" id="sSave">save settings</button><span class="hint" id="sMsg">new terminal sessions pick these up; web sessions after a new tab</span></div>
     <div class="card" id="s-llm"><h3>System 2 · sign-in and endpoints</h3><div id="llmBody"></div></div>
     <div class="card" id="s-default"><h3>System 2 · default model</h3><div class="hint">The model and thinking effort new sessions start with. The list only has models your keys, sign-ins and endpoints can use right now.</div><div id="defaultBody"><span class="hint">loading models…</span></div></div>

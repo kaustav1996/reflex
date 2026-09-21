@@ -315,6 +315,8 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 			{ name: "typesafe-light  — light terminal, like typesafe.ai", value: "typesafe-light" },
 			{ name: "wafer           — dark terminal: near-black, sage/mint accent (wafer.ai)", value: "wafer" },
 			{ name: "wafer-light     — light terminal with sage accent", value: "wafer-light" },
+			{ name: "apple           — dark terminal: system blue, HIG-inspired (Liquid Glass)", value: "apple" },
+			{ name: "apple-light     — light terminal with system blue accent", value: "apple-light" },
 		],
 		default: config.ui.theme,
 	});
