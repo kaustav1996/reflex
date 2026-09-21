@@ -201,7 +201,7 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 
 		// Jev is unavailable (no key or client disabled): deterministic fallback only.
 		if (!state.client) {
-			return fallback(ctx, action, protectedHit, state, "reflex has no TypeSafe key");
+			return fallback(ctx, action, protectedHit, state, "reflex cannot reach Jev (no TypeSafe or OpenRouter key)");
 		}
 
 		const snap = snapshotSession(ctx, { maxToolCalls: 6 });

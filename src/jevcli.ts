@@ -6,8 +6,9 @@
  * Prints JSON answers (probabilities + confidence). Use it to classify, route and order things deterministically in scripts.
  */
 import { readFileSync } from "node:fs";
-import { createKeyResolver, loadDotEnv } from "./config.js";
-import { choice, noul, type Question, score, TypesafeClient } from "./extensions/typesafe/client.js";
+import { createKeyResolver, loadDotEnv, loadReflexConfig } from "./config.js";
+import { choice, noul, type Question, score } from "./extensions/typesafe/client.js";
+import { createJevClient, missingJevHint, normalizeSetting } from "./extensions/typesafe/provider.js";
 import { piStoredApiKey } from "./extensions/typesafe/state.js";
 
 function readArg(v: string | undefined): string {
@@ -22,8 +23,9 @@ export async function runJevCli(args: string[]): Promise<void> {
 		const i = args.indexOf(name);
 		return i >= 0 ? args[i + 1] : undefined;
 	};
-	const key = createKeyResolver(piStoredApiKey).get("typesafe");
-	if (!key) throw new Error("TYPESAFE_API_KEY missing (reflex setup)");
+	const cfg = loadReflexConfig();
+	const made = createJevClient(cfg, createKeyResolver(piStoredApiKey), { timeoutMs: 15000 });
+	if (!made) throw new Error(`Jev is unreachable: ${missingJevHint(normalizeSetting(process.env.REFLEX_JEV_PROVIDER ?? cfg.reflex.provider))}`);
 	const stateRaw = readArg(get("--state") ?? get("-s"));
 	if (!stateRaw) throw new Error("usage: reflex jev --state <text|@file|@-> (--questions <json|@file> | --noul <q> | --choice \"id: a|b|c\" <q> | --score <q> --levels \"l0|l1|l2\")");
 	let state: unknown = stateRaw;
@@ -48,8 +50,7 @@ export async function runJevCli(args: string[]): Promise<void> {
 		}
 	}
 	if (!Object.keys(questions).length) throw new Error("no questions given");
-	const client = new TypesafeClient(key, { timeoutMs: 15000 });
-	const res = await client.systemOne({ purpose: "cli", state: state as never, questions });
-	const out = { model: res.model, latencyMs: Math.round(res.latencyMs), answers: res.answers };
+	const res = await made.client.systemOne({ purpose: "cli", state: state as never, questions });
+	const out = { model: res.model, provider: made.route.provider, latencyMs: Math.round(res.latencyMs), answers: res.answers };
 	console.log(JSON.stringify(out, null, args.includes("--compact") ? 0 : 2));
 }

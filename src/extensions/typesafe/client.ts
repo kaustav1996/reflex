@@ -75,7 +75,8 @@ export type AnswerFor<Q extends Question> = Q extends NoulQuestion
 export interface SystemOneResponse<Q extends Record<string, Question>> {
 	model: string;
 	answers: { [K in keyof Q]: AnswerFor<Q[K]> };
-	usage?: { input_tokens: number; output_tokens: number };
+	/** `cost` (USD) is reported by OpenRouter only. */
+	usage?: { input_tokens: number; output_tokens: number; cost?: number };
 	latencyMs: number;
 }
 
@@ -114,15 +115,22 @@ export interface TypesafeStats {
 	totalLatencyMs: number;
 	lastLatencyMs?: number;
 	lastModel?: string;
+	/** USD, summed from `usage.cost` when the provider reports it (OpenRouter). */
+	costUsd: number;
 }
 
 export class TypesafeClient {
-	readonly stats: TypesafeStats = { requests: 0, failures: 0, inputTokens: 0, outputTokens: 0, totalLatencyMs: 0 };
+	readonly stats: TypesafeStats = { requests: 0, failures: 0, inputTokens: 0, outputTokens: 0, totalLatencyMs: 0, costUsd: 0 };
 
 	constructor(
 		private readonly apiKey: string,
-		private readonly options: { model?: string; baseUrl?: string; timeoutMs?: number; fetchImpl?: typeof fetch } = {},
+		private readonly options: { model?: string; baseUrl?: string; timeoutMs?: number; fetchImpl?: typeof fetch; provider?: "typesafe" | "openrouter" } = {},
 	) {}
+
+	/** Which service this client talks to. */
+	get provider(): "typesafe" | "openrouter" {
+		return this.options.provider ?? "typesafe";
+	}
 
 	get model(): string {
 		return this.options.model ?? DEFAULT_JEV_MODEL;
@@ -161,7 +169,7 @@ export class TypesafeClient {
 						detail = await res.text().catch(() => undefined);
 					}
 					const msg = typeof detail === "object" && detail && "error" in detail ? JSON.stringify((detail as { error: unknown }).error) : String(detail ?? "");
-					throw new TypesafeError(`TypeSafe HTTP ${res.status}${msg ? `: ${msg.slice(0, 300)}` : ""}`, res.status, detail);
+					throw new TypesafeError(`${this.provider === "openrouter" ? "Jev via OpenRouter" : "TypeSafe"} HTTP ${res.status}${msg ? `: ${msg.slice(0, 300)}` : ""}`, res.status, detail);
 				}
 				const json = (await res.json()) as { model: string; answers: SystemOneResponse<Q>["answers"]; usage?: SystemOneResponse<Q>["usage"] };
 				const latencyMs = performance.now() - started;
@@ -171,8 +179,9 @@ export class TypesafeClient {
 				if (json.usage) {
 					this.stats.inputTokens += json.usage.input_tokens ?? 0;
 					this.stats.outputTokens += json.usage.output_tokens ?? 0;
+					this.stats.costUsd += json.usage.cost ?? 0;
 				}
-				logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ms: latencyMs, summary: `${req.purpose ?? "call"} · ${Object.keys(req.questions).length} question${Object.keys(req.questions).length === 1 ? "" : "s"} · ${json.model}${json.usage?.input_tokens ? ` · ${json.usage.input_tokens} tok` : ""}`, detail: { state: req.state, questions: req.questions, answers: json.answers, usage: json.usage } });
+				logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ms: latencyMs, summary: `${req.purpose ?? "call"} · ${Object.keys(req.questions).length} question${Object.keys(req.questions).length === 1 ? "" : "s"} · ${json.model}${this.provider === "openrouter" ? " via openrouter" : ""}${json.usage?.input_tokens ? ` · ${json.usage.input_tokens} tok` : ""}${json.usage?.cost ? ` · $${json.usage.cost.toFixed(6)}` : ""}`, detail: { provider: this.provider, state: req.state, questions: req.questions, answers: json.answers, usage: json.usage } });
 				return { ...json, latencyMs };
 			} catch (err) {
 				lastError = err;
@@ -189,7 +198,7 @@ export class TypesafeClient {
 			}
 		}
 		this.stats.failures++;
-		logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ok: false, ms: performance.now() - started, summary: `${req.purpose ?? "call"} failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`, detail: { state: req.state, questions: req.questions } });
+		logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ok: false, ms: performance.now() - started, summary: `${req.purpose ?? "call"} failed${this.provider === "openrouter" ? " via openrouter" : ""}: ${lastError instanceof Error ? lastError.message : String(lastError)}`, detail: { provider: this.provider, state: req.state, questions: req.questions } });
 		if (lastError instanceof TypesafeError) throw lastError;
 		throw new TypesafeError(lastError instanceof Error ? lastError.message : String(lastError));
 	}

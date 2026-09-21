@@ -37,6 +37,7 @@ import { buildPresetConfig, persistServer, removeConnector } from "../extensions
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
+import { jevRouteFor } from "../extensions/typesafe/provider.js";
 import { ghLogin, githubAuth } from "../artifacts/github.js";
 import { type ProviderName, startCliLogin } from "../artifacts/providers.js";
 import { artifactsConfig, deployLogPath, listArtifacts, listDeploys, loadArtifact, loadDeploy } from "../artifacts/store.js";
@@ -557,7 +558,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 								bundled: existsSync(join(bundledDir, n, "SKILL.md")),
 							}))
 					: [];
-				return json(res, 200, { config: cfg, keys: keyStatus, env: SERVICE_ENV, packages, skills, mcp: loadMcpConfig(), presets: PRESET_META, artifacts: artifactsCfgFor(), artifactDefaults: { RENDER_REGION: process.env.RENDER_REGION || "singapore", ARTIFACTS_REPO_PRIVATE: /^(1|true|yes)$/i.test(process.env.ARTIFACTS_REPO_PRIVATE ?? "") }, agentDir: getPiAgentDir(), home: getReflexHome() });
+				return json(res, 200, { config: cfg, keys: keyStatus, env: SERVICE_ENV, packages, skills, mcp: loadMcpConfig(), presets: PRESET_META, jev: (() => { const r = jevRouteFor(cfg, createKeyResolver(piStoredApiKey)); return r ? { provider: r.provider, reason: r.reason } : null; })(), artifacts: artifactsCfgFor(), artifactDefaults: { RENDER_REGION: process.env.RENDER_REGION || "singapore", ARTIFACTS_REPO_PRIVATE: /^(1|true|yes)$/i.test(process.env.ARTIFACTS_REPO_PRIVATE ?? "") }, agentDir: getPiAgentDir(), home: getReflexHome() });
 			}
 			if (url.pathname === "/api/settings" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { config?: Partial<ReturnType<typeof loadCfg>>; keys?: Record<string, string> };

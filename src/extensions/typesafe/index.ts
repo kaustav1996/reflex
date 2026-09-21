@@ -1,6 +1,7 @@
 /**
  * Reflex layer extension entry: wires the gate, monitor, router and the /reflex command.
  */
+import { missingJevHint, normalizeSetting } from "./provider.js";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { ReflexConfig, RiskAppetite } from "../../config.js";
@@ -67,7 +68,7 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 					});
 			}
 			if (ctx.hasUI && state.config.reflex.enabled && !state.client) {
-				ctx.ui.notify("⚡ Reflex layer is on but no TypeSafe key was found. Run /setup or set TYPESAFE_API_KEY.", "warning");
+				ctx.ui.notify(`⚡ Reflex layer is on but Jev is unreachable: ${missingJevHint(normalizeSetting(state.config.reflex.provider))}. Set TYPESAFE_API_KEY or OPENROUTER_API_KEY, or run /setup.`, "warning");
 			}
 		});
 
@@ -94,7 +95,8 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 		case undefined:
 		case "": {
 			const lines = [
-				`${theme.bold("⚡ Reflex")} ${state.enabled ? theme.fg("success", "on") : theme.fg("error", "off")}${state.client ? "" : theme.fg("warning", " (no TypeSafe key)")}`,
+				`${theme.bold("⚡ Reflex")} ${state.enabled ? theme.fg("success", "on") : theme.fg("error", "off")}${state.client ? "" : theme.fg("warning", " (no TypeSafe or OpenRouter key)")}`,
+				`jev: ${state.route ? `${theme.fg("accent", state.route.provider)} ${theme.fg("dim", `(${state.route.reason}; setting: ${state.config.reflex.provider ?? "auto"})`)}` : theme.fg("warning", "unreachable")}`,
 				`appetite: ${theme.fg("accent", p.riskAppetite)}   gate: ${onOff(p.gateToolCalls)}   monitor: ${onOff(p.monitorProgress)}   route: ${onOff(p.routeModels)}   verbose: ${onOff(p.verbose)}`,
 				`model: ${p.model}   timeout: ${p.timeoutMs}ms   protected: ${p.protectedPaths.length} patterns`,
 				`routing: fast=${p.routing.fast ?? "-"}  default=${p.routing.default ?? "-"}  strong=${p.routing.strong ?? "-"}`,
@@ -139,6 +141,14 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 			}
 			if (rest.length === 0) say("usage: /reflex routing fast=openrouter/google/gemini-3.1-flash-lite-preview default=openrouter/anthropic/claude-sonnet-4.6 strong=openrouter/anthropic/claude-opus-4.7", "info");
 			break;
+		}
+		case "provider": {
+			const v = (rest[0] ?? "").toLowerCase();
+			if (!["auto", "typesafe", "openrouter"].includes(v)) return say(`jev provider: ${state.route?.provider ?? "unreachable"} (setting: ${p.provider ?? "auto"}). Usage: /reflex provider auto|typesafe|openrouter`);
+			p.provider = v as typeof p.provider;
+			state.save();
+			state.refreshClient();
+			return say(state.route ? `Jev now goes through ${state.route.provider} (${state.route.reason}).` : `Jev is unreachable: ${missingJevHint(normalizeSetting(v))}.`, state.route ? "info" : "warning");
 		}
 		case "stats": {
 			const s = state.client?.stats;

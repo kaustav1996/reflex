@@ -3,7 +3,8 @@
  */
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createKeyResolver, getPiAgentDir, getReflexConfigPath, loadReflexConfig, SERVICE_ENV } from "./config.js";
-import { TypesafeClient, noul } from "./extensions/typesafe/client.js";
+import { noul } from "./extensions/typesafe/client.js";
+import { createJevClient, missingJevHint, normalizeSetting } from "./extensions/typesafe/provider.js";
 import { piStoredApiKey } from "./extensions/typesafe/state.js";
 import { detectRecorder, recorderInstallHint } from "./extensions/voice/recorder.js";
 
@@ -31,16 +32,16 @@ export async function runDoctor(): Promise<void> {
 	}
 
 	// TypeSafe
-	const tsKey = keys.get("typesafe");
-	if (!tsKey) console.log(bad("TypeSafe key missing (TYPESAFE_API_KEY or `reflex setup`) → reflex layer disabled"));
+	const made = createJevClient(config, keys, { timeoutMs: 8000 });
+	if (!made) console.log(bad(`Jev unreachable: ${missingJevHint(normalizeSetting(process.env.REFLEX_JEV_PROVIDER ?? config.reflex.provider))} → reflex layer disabled`));
 	else {
-		const client = new TypesafeClient(tsKey, { model: config.reflex.model, timeoutMs: 8000 });
+		const client = made.client;
 		try {
 			const t0 = performance.now();
 			const res = await client.systemOne({ purpose: "doctor", state: { command: "git status" }, questions: { destructive: noul("Is running command destructive?") } });
-			console.log(ok(`TypeSafe ${res.model}: ${Math.round(performance.now() - t0)}ms · P(git status destructive)=${res.answers.destructive.noul.toFixed(3)} · key from ${keys.source("typesafe")}`));
+			console.log(ok(`Jev ${res.model} via ${made.route.provider} (${made.route.reason}): ${Math.round(performance.now() - t0)}ms · P(git status destructive)=${res.answers.destructive.noul.toFixed(3)} · key from ${keys.source(made.route.provider)}`));
 		} catch (err) {
-			console.log(bad(`TypeSafe: ${err instanceof Error ? err.message : String(err)}`));
+			console.log(bad(`Jev via ${made.route.provider}: ${err instanceof Error ? err.message : String(err)}`));
 		}
 	}
 	console.log(`  reflex: ${config.reflex.enabled ? "on" : "off"} · appetite ${config.reflex.riskAppetite} · gate ${config.reflex.gateToolCalls} · monitor ${config.reflex.monitorProgress} · route ${config.reflex.routeModels}`);

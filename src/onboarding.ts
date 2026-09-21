@@ -135,6 +135,7 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 	// ── 2. TypeSafe ────────────────────────────────────────────────────────
 	console.log(bold("2/4  TypeSafe System One (Jev) — the reflex layer"));
 	console.log(dim("  Jev answers narrow typed questions in ~100ms with calibrated confidence."));
+	console.log(dim("  A TypeSafe key calls it directly; without one, an OpenRouter key reaches the same model."));
 	console.log(dim("  Reflex uses it to gate risky actions, catch loops and unverified claims, classify voice, and route models."));
 	let typesafe = await askKey("TypeSafe", "typesafe", true);
 	if (typesafe && options.validateTypesafe) {
@@ -146,8 +147,16 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 			if (!keep) typesafe = undefined;
 		} else console.log(ok("✓"));
 	}
-	if (typesafe) {
-		if (!typesafe.fromEnv) storeKey("typesafe", typesafe.key);
+	// Jev is also served by OpenRouter's System One endpoint, so an OpenRouter key alone is enough.
+	const openrouterKey = providerId === "openrouter" ? (llmKey?.key ?? process.env.OPENROUTER_API_KEY) : process.env.OPENROUTER_API_KEY;
+	let viaOpenRouter = false;
+	if (!typesafe && openrouterKey) {
+		viaOpenRouter = await confirm({ message: "No TypeSafe key. Reach Jev through your OpenRouter key instead (same model, billed by OpenRouter)?", default: true });
+		if (viaOpenRouter) console.log(ok("  ✓ reflex layer will call Jev via OpenRouter"));
+	}
+	if (typesafe || viaOpenRouter) {
+		if (typesafe && !typesafe.fromEnv) storeKey("typesafe", typesafe.key);
+		config.reflex.provider = "auto";
 		config.reflex.enabled = true;
 		config.reflex.riskAppetite = (await select({
 			message: "Risk appetite for autonomous actions:",
@@ -168,7 +177,7 @@ export async function runOnboarding(options: OnboardingOptions = {}): Promise<Re
 		}
 	} else {
 		config.reflex.enabled = false;
-		console.log(warn("  Reflex layer disabled (no TypeSafe key). Run `reflex setup` later to enable."));
+		console.log(warn("  Reflex layer disabled (no TypeSafe or OpenRouter key). Run `reflex setup` later to enable."));
 	}
 	console.log();
 

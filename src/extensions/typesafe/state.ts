@@ -5,7 +5,8 @@ import { logCall } from "../../logs/calls.js";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { createKeyResolver, getPiAgentDir, getReflexHome, type KeyResolver, loadReflexConfig, type ReflexConfig, saveReflexConfig } from "../../config.js";
-import { TypesafeClient } from "./client.js";
+import type { TypesafeClient } from "./client.js";
+import { createJevClient, type JevRoute } from "./provider.js";
 
 export interface GateStats {
 	allowed: number;
@@ -44,6 +45,8 @@ export function piStoredApiKey(provider: string): string | undefined {
 export class ReflexState {
 	config: ReflexConfig;
 	client: TypesafeClient | undefined;
+	/** Which service Jev is reached through (TypeSafe directly or OpenRouter), and why. */
+	route: JevRoute | undefined;
 	keys: KeyResolver;
 	readonly gate: GateStats = { allowed: 0, asked: 0, userAllowed: 0, userDenied: 0, blocked: 0, degraded: 0, skipped: 0 };
 	readonly monitor: MonitorStats = { checks: 0, loopNudges: 0, errorNudges: 0, verifyNudges: 0, driftWarnings: 0 };
@@ -65,8 +68,9 @@ export class ReflexState {
 
 	refreshClient(): void {
 		this.keys = createKeyResolver(piStoredApiKey);
-		const key = this.keys.get("typesafe");
-		this.client = key ? new TypesafeClient(key, { model: this.config.reflex.model, timeoutMs: this.config.reflex.timeoutMs }) : undefined;
+		const made = createJevClient(this.config, this.keys);
+		this.client = made?.client;
+		this.route = made?.route;
 	}
 
 	get enabled(): boolean {

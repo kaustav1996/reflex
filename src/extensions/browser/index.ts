@@ -55,7 +55,7 @@ export function createBrowserExtension(config: ReflexConfig, getReflex: () => Re
 
 		async function browse(ctx: ExtensionContext, goal: string, url: string | undefined, maxSteps: number | undefined, onStep: (line: string, entry?: unknown) => void): Promise<BrowseResult> {
 			const reflex = getReflex();
-			if (!reflex?.client) throw new Error("browse needs the TypeSafe reflex layer (TYPESAFE_API_KEY / reflex setup): System One drives the browser.");
+			if (!reflex?.client) throw new Error("browse needs Jev (TYPESAFE_API_KEY or OPENROUTER_API_KEY / reflex setup): System One drives the browser.");
 			const startUrl = url ?? (current ? undefined : DEFAULT_START);
 			const { result, browser } = await runBrowse(reflex.client, {
 				goal,

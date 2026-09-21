@@ -65,6 +65,15 @@ allow a scope for the session such as all `git` commands or all edits under `src
 allowed is sent back to Jev as context, which stops repeat questions about the same kind of
 action. Well-known read-only commands never ask.
 
+Jev can be reached two ways, and Reflex uses whichever key you have. A `TYPESAFE_API_KEY` calls
+TypeSafe's API directly. An `OPENROUTER_API_KEY` calls the same model through
+[OpenRouter's System One endpoint](https://openrouter.ai/typesafe), which takes the same request
+and returns the same answers plus the cost of each call. With the default setting `auto`, a
+TypeSafe key is used when present and the OpenRouter key otherwise, so an OpenRouter key alone
+runs both the LLM and the reflex layer. `/reflex provider auto|typesafe|openrouter`, Settings →
+Reflex layer, or `REFLEX_JEV_PROVIDER` picks one explicitly, and an explicit choice never falls
+back to the other service.
+
 The design rules come from the TypeSafe docs. Code owns control flow. Reflex asks many narrow
 questions in one request, keeps choice options mutually exclusive with an explicit escape, and
 routes on confidence thresholds scaled to risk. Jev is text-only and adversarial content can
@@ -85,7 +94,8 @@ Onboarding asks for three things, or picks them up from your environment or a `.
 
 1. An LLM provider key: OpenRouter (one key for every model), or Anthropic, OpenAI, Gemini,
    Groq, xAI, DeepSeek or Mistral. Pi stores it in `~/.reflex/agent/auth.json`.
-2. A TypeSafe key for the reflex layer, and your risk appetite.
+2. A TypeSafe key for the reflex layer, and your risk appetite. Without a TypeSafe key, Reflex
+   offers to reach Jev through your OpenRouter key instead.
 3. A voice provider: Sarvam (22 Indian languages and English, with language detection and
    optional translation to English), OpenAI, Groq, Deepgram, or local whisper.cpp.
 
@@ -104,7 +114,7 @@ reflex --model openrouter/moonshotai/kimi-k2.7-code   # any Pi flag works
 
 | In a session | |
 |---|---|
-| `/reflex` | policy: `appetite cautious\|balanced\|bold`, `gate`, `monitor`, `route`, `select`, `verbose`, `routing fast=… default=… strong=…`, `stats`, `last` |
+| `/reflex` | policy: `appetite cautious\|balanced\|bold`, `provider auto\|typesafe\|openrouter`, `gate`, `monitor`, `route`, `select`, `verbose`, `routing fast=… default=… strong=…`, `stats`, `last` |
 | `/voice` or ctrl+shift+v | push-to-talk; Enter transcribes, Esc cancels; `/voice send`, `/voice lang hi-IN`, `/voice translate`, `/voice provider groq` |
 | `/browse <goal>` | run a web task with the System One browser agent and watch the steps |
 | `/computer on` | `screenshot` and `computer` tools: open apps, read the accessibility tree, click, type, AppleScript; every action gated |

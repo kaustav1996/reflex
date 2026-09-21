@@ -8,8 +8,9 @@
  * Routing is data, not code: `route: [{ when: "verdict.severity.score >= 2", next: "escalate" }]`.
  */
 import { spawn } from "node:child_process";
-import { createKeyResolver, loadDotEnv } from "../config.js";
-import { type Question, TypesafeClient } from "../extensions/typesafe/client.js";
+import { createKeyResolver, loadDotEnv, loadReflexConfig } from "../config.js";
+import type { Question } from "../extensions/typesafe/client.js";
+import { createJevClient } from "../extensions/typesafe/provider.js";
 import { piStoredApiKey } from "../extensions/typesafe/state.js";
 import type { AgentDefinition } from "./store.js";
 
@@ -157,8 +158,7 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 	const ids = steps.map((s, i) => s.id ?? `step${i + 1}`);
 	loadDotEnv(hooks.cwd); // the agent's project .env (and ~/.reflex/.env) may hold TYPESAFE_API_KEY
 	const keys = createKeyResolver(piStoredApiKey);
-	const tsKey = keys.get("typesafe");
-	const jev = tsKey ? new TypesafeClient(tsKey, { timeoutMs: 12000 }) : undefined;
+	const jev = createJevClient(loadReflexConfig(), keys, { timeoutMs: 12000 })?.client;
 	let i = 0;
 	let guard = 0;
 	let lastOutput: string | undefined;
@@ -188,7 +188,7 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					break;
 				}
 				case "decide": {
-					if (!jev) throw new Error("decide step needs TYPESAFE_API_KEY");
+					if (!jev) throw new Error("decide step needs Jev: set TYPESAFE_API_KEY or OPENROUTER_API_KEY");
 					const state = renderDeep(step.state, vars) as string | Record<string, unknown>;
 					hooks.emit({ type: "step_start", index: i, id, stepType: "decide", summary: Object.keys(step.questions).join(", ") });
 					const res = await jev.systemOne({ purpose: `workflow:${step.id}`, state, questions: step.questions, signal: hooks.signal });
