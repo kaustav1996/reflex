@@ -190,6 +190,14 @@ run record carries what it cost. Progress is saved after every completed step, s
 `reflex agent resume <agent> <run>` continues an interrupted run without repeating finished
 steps. Webhook senders can pass an idempotency key so a retry does not start a second run.
 
+Session hooks start an agent, or a shell command, when a session does something: a session
+starts or ends, you send a prompt, a tool is about to run or has finished, the agent stops. A
+hook can be narrowed by a matcher (tool, command regex, path glob) and by a TypeSafe yes/no
+question about the event, so "when the agent stops and this turn changed code, run my test-report
+workflow" is a few lines in `~/.reflex/hooks.json` or Settings → Hooks. A `before_tool` command
+that exits with code 2 blocks the tool call. A project can ship its own `.reflex/hooks.json`, but
+those stay off until you approve that exact file, so cloning a repo never runs its commands.
+
 Every agent has a workflow diagram in the Agents tab. It shows the triggers, each step coloured
 by kind, the routes that TypeSafe answers decide in pink, and any chained agents. Nodes light up
 as a run executes, and `reflex agent diagram <id>` prints the same graph as Mermaid. You can ask

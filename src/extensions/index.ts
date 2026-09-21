@@ -6,6 +6,7 @@ import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-ag
 import { getReflexConfigPath, type ReflexConfig, storeKey } from "../config.js";
 import { createAgentsExtension } from "./agents/index.js";
 import { createArtifactsExtension } from "./artifacts/index.js";
+import { createHooksExtension } from "./hooks/index.js";
 import { createLogsExtension } from "./logs.js";
 import { createBrowserExtension } from "./browser/index.js";
 import { createComputerExtension } from "./computer/index.js";
@@ -47,6 +48,7 @@ export function createReflexExtensions(config: ReflexConfig): InlineExtension[] 
 		{ name: "reflex-mcp", factory: createMcpExtension() },
 		{ name: "reflex-secrets", factory: createSecretsExtension(config, () => shared.state) },
 		{ name: "reflex-artifacts", factory: createArtifactsExtension(() => shared.state) },
+		{ name: "reflex-hooks", factory: createHooksExtension(() => shared.state) },
 		{ name: "reflex-setup", factory: createSetupExtension(config, () => shared.state), hidden: true },
 	];
 }

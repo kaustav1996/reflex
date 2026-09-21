@@ -448,7 +448,7 @@ function handle(id, ev) {
     case "tool_execution_end": { const t = v.byTool[ev.toolCallId]; if (t) { t.status = ev.isError ? "err" : "ok"; t.out = resultText(ev.result); t.images = (ev.result?.content || []).filter(c => c.type === "image"); } break; }
     case "extension_ui_request":
       if (ev.method === "notify") notice(ev.notifyType || ev.notificationType || "info", ev.message);
-      else if (ev.method === "setStatus") { const k = ev.statusKey ?? ev.key, t = ev.statusText ?? ev.text; if (k === "reflex-last") { if (t) v.items.push({ kind: "reflex", text: stripAnsi(t).replace(/^⚡\s*/, "") }); } else if (t == null) delete v.status[k]; else v.status[k] = stripAnsi(t); }
+      else if (ev.method === "setStatus") { const k = ev.statusKey ?? ev.key, t = ev.statusText ?? ev.text; if (k === "reflex-last") { if (t) v.items.push({ kind: "reflex", text: stripAnsi(t).replace(/^⚡\s*/, "") }); } else if (k === "hook-last") { if (t) v.items.push({ kind: "hook", text: stripAnsi(t) }); } else if (t == null) delete v.status[k]; else v.status[k] = stripAnsi(t); }
       else if (ev.method === "setTitle") v.title = ev.title;
       else if (ev.method === "setWidget") { const c = ev.widgetLines ?? ev.content ?? ev.lines; if (c) v.items.push({ kind: "reflex", text: (Array.isArray(c) ? c : [String(c)]).map(stripAnsi).join("\n") }); }
       else if (ev.method === "set_editor_text") $("#input").value = ev.text || "";
@@ -506,6 +506,7 @@ function renderItems(items, v) {
     if (it.kind === "tool") { group.push(it); continue; }
     flush();
     if (it.kind === "user") out.push(`<div class="msg user">${esc(it.text)}</div>`);
+    else if (it.kind === "hook") out.push(`<div class="reflex"><b>↪</b> <span class="tsl" style="background:var(--ink);color:var(--paper)">HOOK</span> ${esc(it.text)}</div>`);
     else if (it.kind === "error") out.push(`<div class="msg llm-error"><b>✗ no response</b> ${esc(it.text)}</div>`);
     else if (it.kind === "assistant") out.push((it.thinking ? `<div class="msg thinking">${esc(it.thinking.slice(-600))}</div>` : "") + `<div class="msg assistant md">${md(it.text)}${v.streaming === it ? "▌" : ""}</div>`);
     else if (it.kind === "reflex") out.push(`<div class="reflex${/^(gate|select|route|monitor|completion|voice|browse|allow|ask|block|session)/.test(it.text) ? " ts" : ""}"><b>⚡</b> ${/^(gate|select|route|monitor|completion|voice|browse)/.test(it.text) ? `<span class="tsl">TypeSafe</span> ` : ""}${esc(it.text)}</div>`);
@@ -901,7 +902,7 @@ function paintRun(v) {
 // ── settings ─────────────────────────────────────────────────────────────
 async function loadSettings() {
   const d = await api("/api/settings"); state.settings = d; const c = d.config;
-  const PAGES = { system2: "System 2 · LLM", system1: "System 1 · Reflex", voice: "Voice", browser: "Browser agent", look: "Look", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", logs: "Logs" };
+  const PAGES = { system2: "System 2 · LLM", system1: "System 1 · Reflex", voice: "Voice", browser: "Browser agent", look: "Look", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", hooks: "Hooks", logs: "Logs" };
   if (state.settingsPage === "keys" || state.settingsPage === "llm") state.settingsPage = "system2"; if (state.settingsPage === "reflex") state.settingsPage = "system1";
   if (!PAGES[state.settingsPage]) state.settingsPage = "system2";
   const nav = $("#settingsNav"); nav.innerHTML = Object.entries(PAGES).map(([k, label]) => `<div class="sess" data-k="${k}">${label}</div>`).join("");
@@ -928,6 +929,7 @@ async function loadSettings() {
     <div class="card" id="s-llm"><h3>System 2 · sign-in and endpoints</h3><div id="llmBody"></div></div>
     <div class="card" id="s-default"><h3>System 2 · default model</h3><div class="hint">The model and thinking effort new sessions start with. The list only has models your keys, sign-ins and endpoints can use right now.</div><div id="defaultBody"><span class="hint">loading models…</span></div></div>
     <div class="card" id="s-artifacts"><h3>Artifact defaults</h3><div class="hint">Every artifact deploys with these unless it sets its own domain, region or repo visibility on its page (Artifacts tab).</div><div id="artSettingsBody"></div></div>
+    <div class="card" id="s-hooks"><h3>Hooks</h3><div class="hint">When a session does X, run Y. A hook fires on a session event, optionally narrowed by a matcher and by a TypeSafe yes/no question, and then starts one of your workflow agents or runs a shell command. Each firing shows in the session as a <b>hook</b> line and in Logs. These are your global hooks (every project); a project can add its own in <code>.reflex/hooks.json</code>, which stay off until you approve that file in a session.</div><div id="hooksBody"></div></div>
     <div class="card" id="s-logs"><h3>Call logs</h3><div class="hint">Every TypeSafe (Jev) request with its state, questions and answers; every LLM response with tokens and cost; voice transcriptions; browser-agent steps. From all sessions and agent runs on this machine (~/.reflex/logs/calls.jsonl). Secrets are masked before writing: known keys as <code>[SECRET:NAME]</code>, anything that looks like a credential as <code>[SECRET:#hash]</code>.</div><div id="logsBody"></div></div>
     <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3><div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
       <div class="rowbtns"><input id="pkgSrc" placeholder="npm:@scope/pkg  ·  git:github.com/user/repo  ·  https://github.com/user/repo" style="flex:1;font:inherit;padding:5px;border:1px solid var(--line);background:var(--paper);color:var(--ink)"><button class="b small" id="pkgAdd">install</button></div><pre class="out" id="pkgOut" style="display:none"></pre>
@@ -946,6 +948,7 @@ async function loadSettings() {
   wireJevChoice(d.jev);
   drawLlm();
   drawModelChoices(c);
+  drawHooks();
   drawConnectors();
   state.artCfg = d.artifacts; state.artDefaults = d.artifactDefaults || {};
   $("#artSettingsBody").innerHTML = artifactSetup(d.artifacts, true); wireArtifactSetup($("#artSettingsBody"));
@@ -1222,6 +1225,44 @@ function openArtifactDeploy(id, did) {
     log.scrollTop = log.scrollHeight; };
 }
 
+// ── hooks: when a session does X, run Y ─────────────────────────────────────
+state.hookEdit = null;
+async function drawHooks() {
+  const body = $("#hooksBody"); if (!body) return;
+  let d; try { d = await api("/api/hooks"); } catch (e) { body.innerHTML = `<span class="hint">restart reflex web to use hooks (${esc(e.message)})</span>`; return; }
+  const h = state.hookEdit || { id: "", event: "agent_end", enabled: true, run: {}, match: {} };
+  const isCmd = h.run && h.run.command !== undefined && h.run.agent === undefined;
+  const what = x => x.run.agent ? `run agent <b>${esc(x.run.agent)}</b>` : `run <code>${esc(String(x.run.command).slice(0, 70))}</code>`;
+  const cond = x => [x.match && Object.entries(x.match).map(([k, v]) => `${k} ${esc(Array.isArray(v) ? v.join("|") : String(v))}`).join(" · "), x.if && `⚡ if “${esc(x.if.question)}” ≥ ${x.if.min ?? 0.6}`].filter(Boolean).join(" · ");
+  body.innerHTML = `
+    <div style="margin:10px 0 4px">${d.hooks.length ? d.hooks.map(x => `<div class="mcp-row" style="grid-template-columns:1fr auto"><div><b>${esc(x.id)}</b> <span class="chip">${esc(x.event)}</span>${x.enabled === false ? ' <span class="muted">off</span>' : ""} → ${what(x)}<div class="hint">${cond(x) || "every time"}${x.description ? " · " + esc(x.description) : ""}</div></div><span><button class="b small" data-hedit="${esc(x.id)}">edit</button> <button class="b small" data-htoggle="${esc(x.id)}">${x.enabled === false ? "enable" : "disable"}</button> <button class="b small danger" data-hrm="${esc(x.id)}">✕</button></span></div>`).join("") : '<span class="hint">no hooks yet</span>'}</div>
+    <div style="margin:14px 0 4px;font-weight:600;border-top:1px solid var(--line);padding-top:10px">${state.hookEdit ? "Edit hook" : "Add a hook"}</div>
+    <div class="form"><label>name</label><input id="hkId" value="${esc(h.id)}" placeholder="report-on-stop" ${state.hookEdit ? "disabled" : ""} spellcheck="false">
+      <label>when</label><div><select id="hkEvent">${d.events.map(e => `<option value="${e.id}" ${e.id === h.event ? "selected" : ""}>${e.id} — ${esc(e.help)}</option>`).join("")}</select></div>
+      <label>only if tool</label><input id="hkTool" value="${esc(Array.isArray(h.match?.tool) ? h.match.tool.join(",") : h.match?.tool || "")}" placeholder="bash · edit,write · computer*   (before_tool / after_tool)" spellcheck="false">
+      <label>…command matches</label><input id="hkCmd" value="${esc(h.match?.command || "")}" placeholder="regex on the bash command, e.g. ^git push" spellcheck="false">
+      <label>…path matches</label><input id="hkPath" value="${esc(h.match?.path || "")}" placeholder="glob on the file path, e.g. src/**/*.ts" spellcheck="false">
+      <label>…prompt matches</label><input id="hkPrompt" value="${esc(h.match?.prompt || "")}" placeholder="regex on your prompt (prompt event)" spellcheck="false">
+      <label>…result</label><select id="hkErr"><option value="">any</option><option value="true" ${h.match?.error === true ? "selected" : ""}>only failed tool results</option><option value="false" ${h.match?.error === false ? "selected" : ""}>only successful ones</option></select>
+      <label>⚡ ask Jev first</label><div style="display:flex;gap:6px"><input id="hkIf" value="${esc(h.if?.question || "")}" placeholder="optional yes/no question, e.g. Did this turn change source code?" style="flex:1"><input id="hkMin" type="number" step="0.05" min="0" max="1" value="${h.if?.min ?? 0.6}" style="width:80px" title="fire when P(yes) is at least this"></div>
+      <label>then</label><select id="hkKind"><option value="agent" ${isCmd ? "" : "selected"}>run a workflow agent</option><option value="command" ${isCmd ? "selected" : ""}>run a shell command</option></select>
+      <label id="hkAgentL">agent</label><div id="hkAgentC"><select id="hkAgent">${d.agents.length ? d.agents.map(a => `<option value="${esc(a.id)}" ${h.run?.agent === a.id ? "selected" : ""}>${esc(a.name)}${a.workflow ? " · workflow" : ""}</option>`).join("") : '<option value="">no agents yet — create one in the Agents tab</option>'}</select><textarea id="hkInput" rows="2" placeholder="input for the agent. {{event}} {{cwd}} {{tool}} {{command}} {{path}} {{prompt}} {{result}} {{lastAssistant}} · blank = a summary of the event" style="margin-top:6px">${esc(h.run?.input || "")}</textarea></div>
+      <label id="hkCommandL">command</label><div id="hkCommandC"><input id="hkCommand" value="${esc(h.run?.command || "")}" placeholder="./scripts/check.sh   (payload as JSON on stdin and REFLEX_* env vars)" spellcheck="false"><div class="muted">On <b>before_tool</b> the command is awaited, and exit code 2 blocks the tool call with the command's output as the reason the model sees.</div></div></div>
+    <div class="rowbtns"><button class="b small primary" id="hkSave">${state.hookEdit ? "save hook" : "add hook"}</button>${state.hookEdit ? '<button class="b small" id="hkCancel">cancel</button>' : ""}<span class="hint" id="hkMsg">Stored in ${esc(d.file)}. Sessions pick up changes at their next prompt. Hook commands are yours, so they do not go through the reflex gate.</span></div>`;
+  const kind = () => { const c = $("#hkKind").value === "command"; for (const [id, show] of [["hkAgentL", !c], ["hkAgentC", !c], ["hkCommandL", c], ["hkCommandC", c]]) $("#" + id).style.display = show ? "" : "none"; };
+  $("#hkKind").onchange = kind; kind();
+  body.querySelectorAll("[data-hedit]").forEach(b => b.onclick = () => { state.hookEdit = d.hooks.find(x => x.id === b.dataset.hedit); drawHooks(); });
+  body.querySelectorAll("[data-hrm]").forEach(b => b.onclick = async () => { await api(`/api/hooks/${b.dataset.hrm}`, { method: "DELETE" }); state.hookEdit = null; drawHooks(); });
+  body.querySelectorAll("[data-htoggle]").forEach(b => b.onclick = async () => { const x = d.hooks.find(y => y.id === b.dataset.htoggle); await api("/api/hooks", { method: "POST", body: JSON.stringify({ ...x, enabled: x.enabled === false }), headers: { "Content-Type": "application/json" } }); drawHooks(); });
+  if ($("#hkCancel")) $("#hkCancel").onclick = () => { state.hookEdit = null; drawHooks(); };
+  $("#hkSave").onclick = async () => {
+    const tool = $("#hkTool").value.trim(); const err = $("#hkErr").value;
+    const match = { tool: tool ? (tool.includes(",") ? tool.split(",").map(x => x.trim()).filter(Boolean) : tool) : undefined, command: $("#hkCmd").value.trim() || undefined, path: $("#hkPath").value.trim() || undefined, prompt: $("#hkPrompt").value.trim() || undefined, error: err === "" ? undefined : err === "true" };
+    const q = $("#hkIf").value.trim();
+    const hook = { id: $("#hkId").value.trim(), event: $("#hkEvent").value, match, if: q ? { question: q, min: Number($("#hkMin").value) } : undefined, run: $("#hkKind").value === "command" ? { command: $("#hkCommand").value } : { agent: $("#hkAgent").value, input: $("#hkInput").value || undefined }, enabled: state.hookEdit ? state.hookEdit.enabled !== false : true };
+    try { await api("/api/hooks", { method: "POST", body: JSON.stringify(hook), headers: { "Content-Type": "application/json" } }); state.hookEdit = null; drawHooks(); notice("info", `hook ${hook.id} saved`); } catch (e) { $("#hkMsg").textContent = "✗ " + e.message; } };
+}
+
 // ── LLM access: subscription sign-in (Pi's OAuth flows) and OpenAI-compatible endpoints ──
 async function drawLlm() {
   const body = $("#llmBody"); if (!body) return;
@@ -1318,8 +1359,8 @@ async function drawModelChoices(c) {
 }
 
 // ── call logs (Settings → Logs) ───────────────────────────────────────────
-state.logKinds = ["typesafe", "llm", "voice", "browser"]; state.logQuery = ""; state.logOpen = {}; state.logTimer = null; state.logAuto = true;
-const LOG_KIND = { typesafe: ["⚡ TYPESAFE", "var(--pink)"], llm: ["LLM", "var(--ink)"], voice: ["VOICE", "var(--green)"], browser: ["BROWSER", "#4285F4"] };
+state.logKinds = ["typesafe", "llm", "voice", "browser", "hook"]; state.logQuery = ""; state.logOpen = {}; state.logTimer = null; state.logAuto = true;
+const LOG_KIND = { typesafe: ["⚡ TYPESAFE", "var(--pink)"], llm: ["LLM", "var(--ink)"], voice: ["VOICE", "var(--green)"], browser: ["BROWSER", "#4285F4"], hook: ["↪ HOOK", "var(--gray)"] };
 async function drawLogs() {
   const body = $("#logsBody"); if (!body) return;
   if (!body.querySelector("#logList")) {

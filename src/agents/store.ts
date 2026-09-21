@@ -109,7 +109,7 @@ export interface AgentRun {
 	id: string;
 	agentId: string;
 	status: RunStatus;
-	trigger: { type: TriggerKind | "chain"; from?: string };
+	trigger: { type: TriggerKind | "chain" | "hook"; from?: string };
 	input?: string;
 	output?: string;
 	error?: string;

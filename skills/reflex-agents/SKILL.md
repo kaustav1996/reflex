@@ -208,6 +208,34 @@ Every agent that runs unattended gets `limits`; a run that would cross one ends 
 - Judge an agent by cost per completed task (`reflex agent runs <id>` shows `$` per run), not per
   call: a cheap decision that sends a worker down the wrong branch costs more than it saved.
 
+### Session hooks: run an agent when a session does something
+
+Besides cron, webhooks and manual runs, a workflow agent can be started by a **session hook**:
+"when a session does X, run Y". Hooks live in `~/.reflex/hooks.json` (global) or
+`<project>/.reflex/hooks.json` (off until the user approves that file in a session), and can be
+edited in `reflex web` → Settings → Hooks. `/hooks` lists the active ones.
+
+```json
+{ "hooks": [
+  { "id": "report-on-stop", "event": "agent_end",
+    "if": { "question": "Did this turn change source code?", "min": 0.6 },
+    "run": { "agent": "test-report", "input": "Session in {{cwd}} stopped. Last reply: {{lastAssistant}}" } },
+  { "id": "no-force-push", "event": "before_tool", "match": { "tool": "bash", "command": "^git push .*--force" },
+    "run": { "command": "echo 'force pushes are not allowed in this repo'; exit 2" } }
+] }
+```
+
+Events: `session_start`, `session_end`, `prompt`, `before_tool`, `after_tool`, `turn_end`,
+`agent_end`, `model_change`, `compact`. `match` narrows by `tool` (name, list or glob), `command`
+(regex on the bash command), `path` (glob), `prompt` (regex) and `error` (after_tool). `if` asks
+Jev one yes/no question about the event and fires only at or above `min`: use it so an expensive
+agent runs only when it matters. An agent action starts the run detached (it outlives the
+session and is listed under the agent with trigger `hook`); templates can use `{{event}}`,
+`{{cwd}}`, `{{tool}}`, `{{command}}`, `{{path}}`, `{{prompt}}`, `{{result}}`, `{{lastAssistant}}`.
+A command gets the payload as JSON on stdin and `REFLEX_*` env vars; on `before_tool` it is
+awaited and exit code 2 blocks the tool call, with its output as the reason. Runs started by a
+hook do not fire hooks themselves, so there are no loops.
+
 ### The diagram
 
 Every agent has a workflow diagram in the Agents tab (and `reflex agent diagram <id>` prints it

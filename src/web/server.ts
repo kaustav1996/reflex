@@ -37,6 +37,7 @@ import { buildPresetConfig, persistServer, removeConnector } from "../extensions
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
+import { deleteGlobalHook, EVENT_HELP, globalHooksPath, HOOK_EVENTS, listGlobalHooks, saveGlobalHook } from "../hooks/store.js";
 import { answerLogin, cancelLogin, COMPAT_PRESETS, currentDefault, EFFORTS, getLogin, listCompatProviders, listEndpointModels, logoutProvider, removeCompatProvider, saveCompatProvider, setDefaultModel, startLogin, storedAuthType, SUBSCRIPTION_LOGINS, usableModels } from "../llm/providers.js";
 import { asProvider, chosenProvider, JEV_LABEL, jevModelFor, jevRouteFor, listJevModels } from "../extensions/typesafe/provider.js";
 import { ghLogin, githubAuth } from "../artifacts/github.js";
@@ -866,6 +867,22 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			const le = url.pathname.match(/^\/api\/llm\/endpoints\/([a-z0-9-]+)$/);
 			if (le && req.method === "DELETE") {
 				removeCompatProvider(le[1]);
+				return json(res, 200, { ok: true });
+			}
+			// ---- session hooks (global file; project files are approved inside a session) ----
+			if (url.pathname === "/api/hooks" && req.method === "GET") {
+				return json(res, 200, { hooks: listGlobalHooks(), events: HOOK_EVENTS.map((e) => ({ id: e, help: EVENT_HELP[e] })), file: globalHooksPath(), agents: listAgents().map((a) => ({ id: a.id, name: a.name, workflow: !!a.steps?.length })) });
+			}
+			if (url.pathname === "/api/hooks" && req.method === "POST") {
+				try {
+					return json(res, 200, { hook: saveGlobalHook(JSON.parse((await readBody(req)).toString("utf8"))) });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			const hk = url.pathname.match(/^\/api\/hooks\/([a-z0-9-_]+)$/);
+			if (hk && req.method === "DELETE") {
+				deleteGlobalHook(hk[1]);
 				return json(res, 200, { ok: true });
 			}
 			if (url.pathname === "/api/jev/models" && req.method === "GET") {

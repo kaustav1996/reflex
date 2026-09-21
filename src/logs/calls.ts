@@ -14,7 +14,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { basename, join } from "node:path";
 import { getReflexHome } from "../config.js";
 
-export type CallKind = "typesafe" | "llm" | "voice" | "browser";
+export type CallKind = "typesafe" | "llm" | "voice" | "browser" | "hook";
 
 export interface CallEntry {
 	at: number;

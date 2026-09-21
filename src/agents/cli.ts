@@ -28,7 +28,9 @@ export async function runAgentCli(args: string[]): Promise<void> {
 			if (!agent) throw new Error(`unknown agent "${id}". reflex agent list`);
 			const input = flag("--input");
 			console.log(`▶ running ${agent.name} …`);
-			const run = await runAgent(agent, { type: "manual" }, input, (_r, ev) => {
+			// A session hook starts runs with --trigger hook --from <hook@session>, so the run says where it came from.
+			const trigger = flag("--trigger") === "hook" ? ({ type: "hook", from: flag("--from") } as const) : ({ type: "manual" } as const);
+			const run = await runAgent(agent, trigger, input, (_r, ev) => {
 				const e = ev as { type?: string; toolName?: string; args?: Record<string, unknown> };
 				if (e.type === "tool_execution_start") console.log(`  ↳ ${e.toolName} ${JSON.stringify(e.args ?? {}).slice(0, 100)}`);
 			});
