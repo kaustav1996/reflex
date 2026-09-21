@@ -23,7 +23,7 @@ const require = createRequire(import.meta.url);
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createKeyResolver, loadReflexConfig } from "../config.js";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { piStoredApiKey } from "../extensions/typesafe/state.js";
 import { transcribe } from "../extensions/voice/providers.js";
 import { convertToWav } from "./audio.js";
@@ -45,6 +45,20 @@ import { writeSecret } from "../extensions/secrets/store.js";
 import { rememberSecret } from "../extensions/secrets/index.js";
 import { callLogStats, clearCalls, readCalls, type CallKind } from "../logs/calls.js";
 import { saveArtifact } from "../artifacts/store.js";
+
+/** LLM providers whose keys Pi stores in ~/.reflex/agent/auth.json. */
+const PI_AUTH_PROVIDERS = new Set(["openrouter", "anthropic", "google", "xai", "deepseek", "mistral"]);
+
+/** Returns a reason when OpenRouter rejects the key; undefined when it is valid or the check could not run. */
+async function checkOpenRouterKey(key: string): Promise<string | undefined> {
+	try {
+		const res = await fetch("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(6000) });
+		if (res.status === 401 || res.status === 403) return "OpenRouter rejected this key (401)";
+		return undefined;
+	} catch {
+		return undefined; // offline or slow: save it rather than block
+	}
+}
 
 function artifactsCfgFor() {
 	const gh = githubAuth();
@@ -541,7 +555,7 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			if (url.pathname === "/api/settings" && req.method === "GET") {
 				const cfg = loadCfg();
 				const keys = createKeyResolver(piStoredApiKey);
-				const keyStatus = Object.fromEntries(["typesafe", "sarvam", "openai", "groq", "deepgram", "openrouter", "anthropic", "google"].map((k) => [k, keys.source(k) ?? null]));
+				const keyStatus = Object.fromEntries(["typesafe", "sarvam", "openai", "groq", "deepgram", "openrouter", "anthropic", "google", "xai", "deepseek", "mistral"].map((k) => [k, keys.source(k) ?? null]));
 				let packages: unknown = [];
 				try {
 					const sp = JSON.parse(readFileSync(join(getPiAgentDir(), "settings.json"), "utf8")) as { packages?: unknown };
@@ -562,13 +576,38 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			}
 			if (url.pathname === "/api/settings" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { config?: Partial<ReturnType<typeof loadCfg>>; keys?: Record<string, string> };
-				if (body.keys) for (const [k, v] of Object.entries(body.keys)) if (typeof v === "string") storeKey(k, v.trim() || undefined);
+				// LLM provider keys belong to Pi (auth.json), so the LLM and Jev-via-OpenRouter both see them;
+				// everything else (TypeSafe, voice) lives in ~/.reflex/keys.json. Env vars win over both.
+				const shadowed: string[] = [];
+				const rejected: string[] = [];
+				if (body.keys) {
+					for (const [k, raw] of Object.entries(body.keys)) {
+						if (typeof raw !== "string") continue;
+						const v = raw.trim();
+						if (PI_AUTH_PROVIDERS.has(k)) {
+							if (!v) continue;
+							if (k === "openrouter") {
+								const problem = await checkOpenRouterKey(v);
+								if (problem) {
+									rejected.push(`openrouter: ${problem}`);
+									continue;
+								}
+							}
+							const agentDir = getPiAgentDir();
+							const runtime = await ModelRuntime.create({ authPath: `${agentDir}/auth.json`, modelsPath: `${agentDir}/models.json` });
+							await runtime.login(k, "api_key", { prompt: async () => v, notify: () => {} });
+						} else storeKey(k, v || undefined);
+						const envName = SERVICE_ENV[k];
+						if (v && envName && process.env[envName] && process.env[envName] !== v) shadowed.push(envName);
+					}
+				}
+				if (rejected.length) return json(res, 400, { error: `key not saved — ${rejected.join("; ")}` });
 				if (body.config) {
 					const cfg = loadCfg();
 					const merged = { ...cfg, ...body.config, reflex: { ...cfg.reflex, ...(body.config.reflex ?? {}) }, voice: { ...cfg.voice, ...(body.config.voice ?? {}) }, browser: { ...cfg.browser, ...(body.config.browser ?? {}) }, ui: { ...cfg.ui, ...(body.config.ui ?? {}) }, llm: { ...cfg.llm, ...(body.config.llm ?? {}) } };
 					saveReflexConfig(merged);
 				}
-				return json(res, 200, { ok: true });
+				return json(res, 200, { ok: true, shadowed });
 			}
 			if (url.pathname === "/api/packages" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { action: "install" | "remove"; source: string };
