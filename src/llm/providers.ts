@@ -15,8 +15,8 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ModelRuntime, readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { getPiAgentDir } from "../config.js";
+import { ModelRuntime, readStoredCredential, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { getPiAgentDir, loadReflexConfig, saveReflexConfig } from "../config.js";
 
 // ---------------------------------------------------------------------------
 // Subscription sign-in
@@ -242,4 +242,69 @@ export function removeCompatProvider(name: string): void {
 	if (!file.providers?.[name]) return;
 	delete file.providers[name];
 	writeFileSync(modelsPath(), `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+}
+
+// ---------------------------------------------------------------------------
+// Usable models and the default (what System 2 offers to the rest of Reflex)
+// ---------------------------------------------------------------------------
+
+export const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+export interface UsableModel {
+	/** `provider/id`, the form used everywhere in Reflex config. */
+	ref: string;
+	provider: string;
+	id: string;
+	name?: string;
+	/** Whether the model can think; effort only matters for these. */
+	reasoning: boolean;
+	contextWindow?: number;
+	/** USD per million tokens, when known. */
+	cost?: { input: number; output: number };
+	/** How the provider is authenticated right now. */
+	via: "subscription" | "api key" | "endpoint";
+}
+
+/** Every model whose provider has working credentials: keys, subscription sign-ins and custom endpoints. */
+export async function usableModels(): Promise<UsableModel[]> {
+	const runtime = await modelRuntime();
+	const endpoints = new Set(listCompatProviders().map((e) => e.name));
+	const models = await runtime.getAvailable();
+	return models.map((m) => {
+		const mm = m as unknown as { provider: string; id: string; name?: string; reasoning?: unknown; contextWindow?: number; cost?: { input?: number; output?: number } };
+		return {
+			ref: `${mm.provider}/${mm.id}`,
+			provider: mm.provider,
+			id: mm.id,
+			name: mm.name,
+			reasoning: !!mm.reasoning,
+			contextWindow: mm.contextWindow,
+			cost: mm.cost ? { input: mm.cost.input ?? 0, output: mm.cost.output ?? 0 } : undefined,
+			via: endpoints.has(mm.provider) ? "endpoint" : runtime.isUsingOAuth(mm.provider) ? "subscription" : "api key",
+		};
+	});
+}
+
+export function currentDefault(): { ref?: string; effort?: Effort } {
+	const cfg = loadReflexConfig();
+	let effort: Effort | undefined;
+	try {
+		effort = SettingsManager.create(process.cwd(), getPiAgentDir()).getDefaultThinkingLevel() as Effort | undefined;
+	} catch {}
+	return { ref: cfg.llm.provider && cfg.llm.model ? `${cfg.llm.provider}/${cfg.llm.model}` : undefined, effort };
+}
+
+/** Set the default model (and effort) for new sessions, in both Reflex's config and Pi's settings. */
+export function setDefaultModel(ref: string, effort?: Effort): void {
+	const i = ref.indexOf("/");
+	if (i <= 0) throw new Error("model must look like provider/model-id");
+	const provider = ref.slice(0, i);
+	const model = ref.slice(i + 1);
+	const cfg = loadReflexConfig();
+	cfg.llm = { provider, model };
+	saveReflexConfig(cfg);
+	const settings = SettingsManager.create(process.cwd(), getPiAgentDir());
+	settings.setDefaultModelAndProvider(provider, model);
+	if (effort && (EFFORTS as readonly string[]).includes(effort)) settings.setDefaultThinkingLevel(effort as never);
 }

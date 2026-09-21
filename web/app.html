@@ -686,7 +686,7 @@ async function toggleMic() {
 $("#micBtn").onclick = toggleMic;
 
 // ── tabs ────────────────────────────────────────────────────────────────
-state.tab = "sessions"; state.agents = []; state.agent = null; state.runEs = null; state.openRunId = null; state.settings = null; state.settingsPage = "keys";
+state.tab = "sessions"; state.agents = []; state.agent = null; state.runEs = null; state.openRunId = null; state.settings = null; state.settingsPage = "system2";
 function setTab(t) {
   state.tab = t;
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
@@ -887,28 +887,32 @@ function paintRun(v) {
 // ── settings ─────────────────────────────────────────────────────────────
 async function loadSettings() {
   const d = await api("/api/settings"); state.settings = d; const c = d.config;
-  const PAGES = { keys: "Keys", llm: "LLM access", reflex: "Reflex layer", voice: "Voice", browser: "Browser agent", look: "Look & model", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", logs: "Logs" };
-  if (!PAGES[state.settingsPage]) state.settingsPage = "keys";
+  const PAGES = { system2: "System 2 · LLM", system1: "System 1 · Reflex", voice: "Voice", browser: "Browser agent", look: "Look", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", logs: "Logs" };
+  if (state.settingsPage === "keys" || state.settingsPage === "llm") state.settingsPage = "system2"; if (state.settingsPage === "reflex") state.settingsPage = "system1";
+  if (!PAGES[state.settingsPage]) state.settingsPage = "system2";
   const nav = $("#settingsNav"); nav.innerHTML = Object.entries(PAGES).map(([k, label]) => `<div class="sess" data-k="${k}">${label}</div>`).join("");
   nav.querySelectorAll(".sess").forEach(el => el.onclick = () => showSettingsPage(el.dataset.k));
   const keyRow = (k, label) => `<label>${label}</label><div><input type="password" data-key="${k}" placeholder="${d.keys[k] ? "set (" + d.keys[k] + ") — paste to replace" : "not set · env " + d.env[k]}"></div>`;
   const opt = (name, cur, vals) => `<select data-cfg="${name}">${vals.map(v => `<option ${String(cur) === String(v) ? "selected" : ""}>${v}</option>`).join("")}</select>`;
   $("#settingsPane").innerHTML = `
-    <div class="card" id="s-keys"><h3>Keys</h3><div class="form">${keyRow("typesafe", "TypeSafe (Jev, direct)")}${keyRow("openrouter", "OpenRouter (LLM, and Jev)")}<label></label><div class="muted">One OpenRouter key runs every LLM and also reaches Jev (Reflex layer → Jev provider). Saved to Pi's auth store so sessions and the reflex layer both use it; checked with OpenRouter before saving.</div>${keyRow("sarvam", "Sarvam")}${keyRow("openai", "OpenAI (voice)")}${keyRow("groq", "Groq (voice)")}${keyRow("deepgram", "Deepgram")}</div><details style="margin-top:8px"><summary style="cursor:pointer;font-weight:600">Other LLM providers</summary><div class="form" style="margin-top:6px">${keyRow("anthropic", "Anthropic")}${keyRow("google", "Google Gemini")}${keyRow("xai", "xAI")}${keyRow("deepseek", "DeepSeek")}${keyRow("mistral", "Mistral")}</div></details>
-      <div class="hint">LLM keys are saved to Pi's auth store (~/.reflex/agent/auth.json); TypeSafe and voice keys to ~/.reflex/keys.json. Both are 0600 and never shown again. A key in your environment or a .env file always wins over a saved one.</div></div>
-    <div class="card" id="s-reflex"><h3>Reflex layer (System One)</h3><div class="form">
+    <div class="card" id="s-keys"><h3>System 2 · API keys</h3><div class="hint">System 2 is the language model that writes, plans and talks. Give it a provider in any of three ways: an API key here, a subscription sign-in, or your own OpenAI-compatible server below. Whatever you connect decides which models you can choose as the default and as routing tiers.</div>
+      <div class="form" style="margin-top:8px">${keyRow("openrouter", "OpenRouter")}<label></label><div class="muted">One OpenRouter key runs every LLM, and can also reach Jev (System 1 → Jev provider). Checked with OpenRouter before saving.</div>${keyRow("anthropic", "Anthropic")}${keyRow("openai", "OpenAI")}${keyRow("google", "Google Gemini")}${keyRow("groq", "Groq")}${keyRow("xai", "xAI")}${keyRow("deepseek", "DeepSeek")}${keyRow("mistral", "Mistral")}</div>
+      <div class="hint">Saved to Pi's auth store (~/.reflex/agent/auth.json, 0600) and never shown again. A key in your environment or a .env file always wins over a saved one. Press <b>save settings</b> below to store pasted keys.</div></div>
+    <div class="card" id="s-reflex"><h3>System 1 · Reflex layer (Jev)</h3><div class="hint">System 1 is Jev: fast typed judgments about what System 2 is about to do. Choose where to reach it, then the policy and the model tiers it routes between.</div><div class="form" style="margin-top:8px">
       <label>Jev provider</label><div><select data-cfg="reflex.provider" id="jevProvider">${["typesafe", "openrouter"].map(p => `<option value="${p}" ${d.jev.provider === p ? "selected" : ""}>${esc(d.jev.labels[p])}${d.jev.hasKey[p] ? "" : " · no key yet"}</option>`).join("")}</select><div class="muted" id="jevProviderHint"></div></div>
+      <label id="jevKeyLabel">TypeSafe key</label><div id="jevKeyCell"><input type="password" data-key="typesafe" placeholder="${d.keys.typesafe ? "set (" + d.keys.typesafe + ") — paste to replace" : "not set · env " + d.env.typesafe}"><div class="muted">Needed because Jev is reached through TypeSafe directly. Stored 0600 in ~/.reflex/keys.json.</div></div>
       <label>Jev model</label><div><select id="jevModel"></select><div class="muted" id="jevModelHint">loading models…</div></div>
       <label>enabled</label>${opt("reflex.enabled", c.reflex.enabled, [true, false])}<label>appetite</label>${opt("reflex.riskAppetite", c.reflex.riskAppetite, ["cautious", "balanced", "bold"])}
       <label>gate tool calls</label>${opt("reflex.gateToolCalls", c.reflex.gateToolCalls, [true, false])}<label>monitor progress</label>${opt("reflex.monitorProgress", c.reflex.monitorProgress, [true, false])}
       <label>route models</label>${opt("reflex.routeModels", c.reflex.routeModels, [true, false])}<label>classify voice</label>${opt("reflex.classifyVoice", c.reflex.classifyVoice, [true, false])}<label>verbose decisions</label>${opt("reflex.verbose", c.reflex.verbose, [true, false])}
-      <label>routing fast</label><input data-cfg="reflex.routing.fast" value="${esc(c.reflex.routing.fast || "")}" placeholder="openrouter/google/gemini-3.1-flash-lite-preview"><label>routing default</label><input data-cfg="reflex.routing.default" value="${esc(c.reflex.routing.default || "")}"><label>routing strong</label><input data-cfg="reflex.routing.strong" value="${esc(c.reflex.routing.strong || "")}">
+      <label>routing tiers</label><div><div class="muted" style="margin-bottom:6px">With <b>route models</b> on, Jev classifies each request and Reflex switches to that tier's model and effort. Only models System 2 can use are listed.</div><div id="routingBody"><span class="hint">loading models…</span></div></div>
       <label>protected paths</label><input data-cfg="reflex.protectedPaths" value="${esc(c.reflex.protectedPaths.join(", "))}"></div></div>
-    <div class="card" id="s-voice"><h3>Voice</h3><div class="form"><label>provider</label>${opt("voice.provider", c.voice.provider, ["sarvam", "openai", "groq", "deepgram", "whisper-cpp", "none"])}<label>language</label><input data-cfg="voice.language" value="${esc(c.voice.language)}" placeholder="unknown · en-IN · hi-IN"><label>translate to English</label>${opt("voice.translateToEnglish", c.voice.translateToEnglish, [false, true])}<label>shortcut (TUI)</label><input data-cfg="voice.shortcut" value="${esc(c.voice.shortcut)}"></div></div>
+    <div class="card" id="s-voice"><h3>Voice</h3><div class="form">${keyRow("sarvam", "Sarvam key")}${keyRow("deepgram", "Deepgram key")}<label>OpenAI / Groq</label><div class="muted" style="padding-top:6px">OpenAI ${d.keys.openai ? "✓ " + esc(d.keys.openai) : "not set"} · Groq ${d.keys.groq ? "✓ " + esc(d.keys.groq) : "not set"} · voice reuses the keys from System 2 · LLM</div><label>provider</label>${opt("voice.provider", c.voice.provider, ["sarvam", "openai", "groq", "deepgram", "whisper-cpp", "none"])}<label>language</label><input data-cfg="voice.language" value="${esc(c.voice.language)}" placeholder="unknown · en-IN · hi-IN"><label>translate to English</label>${opt("voice.translateToEnglish", c.voice.translateToEnglish, [false, true])}<label>shortcut (TUI)</label><input data-cfg="voice.shortcut" value="${esc(c.voice.shortcut)}"></div></div>
     <div class="card" id="s-browser"><h3>Browser agent</h3><div class="form"><label>headless</label>${opt("browser.headless", c.browser.headless, [false, true])}<label>attach to Chrome</label><input data-cfg="browser.attachUrl" value="${esc(c.browser.attachUrl || "")}" placeholder="http://127.0.0.1:9222 (your own Chrome with --remote-debugging-port)"><label>text model</label><input data-cfg="browser.textModel" value="${esc(c.browser.textModel || "")}" placeholder="default: session model"><label>max steps</label><input data-cfg="browser.maxSteps" type="number" value="${c.browser.maxSteps}" style="width:90px"></div></div>
-    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light"])}<label>default model</label><input data-cfg="llm.model" value="${esc(c.llm.model || "")}"><label>provider</label><input data-cfg="llm.provider" value="${esc(c.llm.provider || "")}"></div></div>
+    <div class="card" id="s-look"><h3>Look</h3><div class="form"><label>TUI theme</label>${opt("ui.theme", c.ui.theme, ["typesafe", "typesafe-light"])}</div><div class="hint">The default model moved to System 2 · LLM.</div></div>
     <div class="rowbtns" id="sSaveRow"><button class="b primary" id="sSave">save settings</button><span class="hint" id="sMsg">new terminal sessions pick these up; web sessions after a new tab</span></div>
-    <div class="card" id="s-llm"><h3>LLM access</h3><div class="hint">Three ways to give Reflex a language model: an API key (Keys page), a subscription sign-in, or your own OpenAI-compatible server. Jev is separate and comes from TypeSafe or OpenRouter (Reflex layer page).</div><div id="llmBody"></div></div>
+    <div class="card" id="s-llm"><h3>System 2 · sign-in and endpoints</h3><div id="llmBody"></div></div>
+    <div class="card" id="s-default"><h3>System 2 · default model</h3><div class="hint">The model and thinking effort new sessions start with. The list only has models your keys, sign-ins and endpoints can use right now.</div><div id="defaultBody"><span class="hint">loading models…</span></div></div>
     <div class="card" id="s-artifacts"><h3>Artifact defaults</h3><div class="hint">Every artifact deploys with these unless it sets its own domain, region or repo visibility on its page (Artifacts tab).</div><div id="artSettingsBody"></div></div>
     <div class="card" id="s-logs"><h3>Call logs</h3><div class="hint">Every TypeSafe (Jev) request with its state, questions and answers; every LLM response with tokens and cost; voice transcriptions; browser-agent steps. From all sessions and agent runs on this machine (~/.reflex/logs/calls.jsonl). Secrets are masked before writing: known keys as <code>[SECRET:NAME]</code>, anything that looks like a credential as <code>[SECRET:#hash]</code>.</div><div id="logsBody"></div></div>
     <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3><div id="pkgList">${(d.packages || []).map(p => `<span class="chip">${esc(typeof p === "string" ? p : p.source)}<span class="x" data-rm="${esc(typeof p === "string" ? p : p.source)}">✕</span></span>`).join("") || '<span class="hint">none installed</span>'}</div>
@@ -927,6 +931,7 @@ async function loadSettings() {
   showSettingsPage(state.settingsPage);
   wireJevChoice(d.jev);
   drawLlm();
+  drawModelChoices(c);
   drawConnectors();
   state.artCfg = d.artifacts; state.artDefaults = d.artifactDefaults || {};
   $("#artSettingsBody").innerHTML = artifactSetup(d.artifacts, true); wireArtifactSetup($("#artSettingsBody"));
@@ -938,7 +943,7 @@ async function loadSettings() {
   $("#mAdd").onclick = async () => { try { const { name, server } = mcpFromForm(); const servers = state.settings.mcp.servers || {}; servers[name] = { ...server, enabled: true }; await api("/api/mcp", { method: "POST", body: JSON.stringify({ servers }), headers: { "Content-Type": "application/json" } }); state.settings.mcp.servers = servers; drawConnectors(); $("#mOut").style.display = ""; $("#mOut").textContent = `saved ${name}. New sessions get its tools; in an open session type /mcp.`; } catch (e) { $("#mOut").style.display = ""; $("#mOut").textContent = "✗ " + e.message; } };
   $("#sSave").onclick = async () => {
     const keys = {}; document.querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
-    const config = {}; document.querySelectorAll("[data-cfg]").forEach(i => { const path = i.dataset.cfg.split("."); let v = i.value; if (v === "true") v = true; else if (v === "false") v = false; else if (i.type === "number") v = Number(v); if (path.at(-1) === "protectedPaths") v = v.split(",").map(x => x.trim()).filter(Boolean); if (v === "" ) v = undefined; let o = config; for (const k of path.slice(0, -1)) o = o[k] ||= {}; o[path.at(-1)] = v; });
+    const config = {}; document.querySelectorAll("[data-cfg]").forEach(i => { const path = i.dataset.cfg.split("."); let v = i.value; if (v === "true") v = true; else if (v === "false") v = false; else if (i.type === "number") v = Number(v); if (path.at(-1) === "protectedPaths") v = v.split(",").map(x => x.trim()).filter(Boolean); if (v === "") v = /^reflex\.routing/.test(i.dataset.cfg) ? null : undefined; /* an emptied tier must be cleared, not kept */ let o = config; for (const k of path.slice(0, -1)) o = o[k] ||= {}; o[path.at(-1)] = v; });
     try {
       const r = await api("/api/settings", { method: "POST", body: JSON.stringify({ config, keys }), headers: { "Content-Type": "application/json" } });
       $("#sMsg").textContent = r.shadowed && r.shadowed.length ? `saved ✓ — but ${r.shadowed.join(", ")} is set in your environment or .env and takes precedence; remove it there to use the saved key` : "saved ✓";
@@ -1268,7 +1273,34 @@ async function wireJevChoice(jev) {
       $("#jevModelHint").textContent = `${r.live ? "live list" : "offline list"} from ${jev.labels[p]} · models differ per provider and are remembered separately`;
     } catch (e) { $("#jevModelHint").textContent = "could not load models: " + e.message; }
   };
-  prov.onchange = fill; await fill();
+  const keyVis = () => { const direct = prov.value === "typesafe"; $("#jevKeyLabel").style.display = direct ? "" : "none"; $("#jevKeyCell").style.display = direct ? "" : "none"; };
+  prov.onchange = () => { keyVis(); fill(); }; keyVis(); await fill();
+}
+
+/** Default model (System 2) and routing tiers (System 1): dropdowns built from what System 2 can use. */
+async function drawModelChoices(c) {
+  const def = $("#defaultBody"), routing = $("#routingBody"); if (!def || !routing) return;
+  let r; try { r = await api("/api/llm/models"); } catch (e) { def.innerHTML = routing.innerHTML = `<span class="hint">restart reflex web to use this (${esc(e.message)})</span>`; return; }
+  const models = r.models || [], efforts = r.efforts || [];
+  const byProvider = {}; models.forEach(m => (byProvider[m.provider] ||= []).push(m));
+  const price = m => m.via === "subscription" ? " · subscription" : m.via === "endpoint" ? " · your endpoint" : m.cost && (m.cost.input || m.cost.output) ? ` · $${m.cost.input}/$${m.cost.output}` : "";
+  const options = (selected, withNone) => { const known = models.some(m => m.ref === selected);
+    return `${withNone ? `<option value="">— none —</option>` : ""}${selected && !known ? `<option value="${esc(selected)}" selected>${esc(selected)} · not available with your current System 2 setup</option>` : ""}${Object.entries(byProvider).map(([p, list]) => `<optgroup label="${esc(p)} (${esc(list[0].via)})">${list.map(m => `<option value="${esc(m.ref)}" ${m.ref === selected ? "selected" : ""}>${esc(m.id)}${m.reasoning ? " · thinks" : ""}${price(m)}</option>`).join("")}</optgroup>`).join("")}`; };
+  const effortSel = (attrs, selected, inherit) => `<select ${attrs} style="width:130px">${inherit ? `<option value="">${esc(inherit)}</option>` : ""}${efforts.map(e => `<option ${e === selected ? "selected" : ""}>${e}</option>`).join("")}</select>`;
+  if (!models.length) { def.innerHTML = `<span class="hint">No usable models yet${r.error ? " (" + esc(r.error) + ")" : ""}: add a key, sign in, or add an endpoint above.</span>`; routing.innerHTML = `<span class="hint">Connect a provider under System 2 · LLM first.</span>`; return; }
+  // System 2: default model + effort
+  def.innerHTML = `<div class="form" style="margin-top:8px"><label>model</label><select id="defModel">${options(r.default.ref, false)}</select><label>effort</label><div>${effortSel('id="defEffort"', r.default.effort || "medium")}<span class="muted" id="defEffortHint" style="margin-left:8px"></span></div></div><div class="rowbtns"><button class="b small primary" id="defSave">set as default</button><span class="hint" id="defMsg">${models.length} models from ${Object.keys(byProvider).length} provider${Object.keys(byProvider).length === 1 ? "" : "s"} · open sessions keep their model; change it there with the model button</span></div>`;
+  const hint = () => { const m = models.find(x => x.ref === $("#defModel").value); $("#defEffortHint").textContent = m && !m.reasoning ? "this model does not think; effort is ignored" : ""; };
+  $("#defModel").onchange = hint; hint();
+  $("#defSave").onclick = async () => { try { await api("/api/llm/default", { method: "POST", body: JSON.stringify({ ref: $("#defModel").value, effort: $("#defEffort").value }), headers: { "Content-Type": "application/json" } }); $("#defMsg").textContent = `saved ✓ new sessions start with ${$("#defModel").value} at ${$("#defEffort").value} effort`; try { state.config = await api("/api/config"); $("#foot").textContent = `reflex ${state.config.reflex} · voice ${state.config.voice} · ${state.config.model}`; } catch {} } catch (e) { $("#defMsg").textContent = "✗ " + e.message; } };
+  // System 1: routing tiers, model + effort each
+  const defProvider = (r.default.ref || "").split("/")[0];
+  const tiers = [["fast", "simple edits, renames, lookups"], ["default", "ordinary coding work"], ["strong", "hard debugging, design, large changes"]];
+  routing.innerHTML = tiers.map(([t, what]) => `<div style="display:grid;grid-template-columns:70px 1fr 130px;gap:6px;align-items:center;margin-bottom:6px"><b>${t}</b><select data-cfg="reflex.routing.${t}" data-tier="${t}">${options(c.reflex.routing[t] || "", true)}</select>${effortSel(`data-cfg="reflex.routingEffort.${t}"`, (c.reflex.routingEffort || {})[t] || "", "keep effort")}<span></span><span class="muted" data-tierhint="${t}" style="grid-column:2 / 4">${what}</span></div>`).join("") + `<div class="muted" id="routingNote"></div>`;
+  const note = () => { const foreign = []; routing.querySelectorAll("[data-tier]").forEach(sel => { const p = sel.value.split("/")[0]; const m = models.find(x => x.ref === sel.value); const h = routing.querySelector(`[data-tierhint="${sel.dataset.tier}"]`); const base = tiers.find(x => x[0] === sel.dataset.tier)[1]; h.textContent = base + (sel.value && !m ? " · ⚠ not available right now, the router will skip it" : m && defProvider && p !== defProvider ? ` · ⚠ ${m.via === "subscription" ? `uses your ${p} subscription` : m.via === "endpoint" ? `runs on your ${p} endpoint` : `billed to ${p}`}, not your default provider ${defProvider}` : ""); if (m && defProvider && p !== defProvider) foreign.push(sel.dataset.tier); });
+    const set = [...routing.querySelectorAll("[data-tier]")].filter(x => x.value).length;
+    $("#routingNote").textContent = set < 2 ? "Routing needs at least two tiers set." : foreign.length ? `Tier${foreign.length > 1 ? "s" : ""} ${foreign.join(", ")} leave${foreign.length > 1 ? "" : "s"} your default provider (${defProvider}).` : "All tiers stay within your default provider."; };
+  routing.querySelectorAll("[data-tier]").forEach(sel => sel.onchange = note); note();
 }
 
 // ── call logs (Settings → Logs) ───────────────────────────────────────────
@@ -1296,11 +1328,14 @@ async function drawLogs() {
 }
 
 // One settings page at a time: the left nav picks it, the pane shows only that card.
-const CONFIG_PAGES = ["keys", "reflex", "voice", "browser", "look"];
+const CONFIG_PAGES = ["system2", "system1", "voice", "browser", "look"];
+// A page can show several cards: System 2 is keys + sign-in + endpoints + the default model.
+const PAGE_CARDS = { system2: ["s-keys", "s-llm", "s-default"], system1: ["s-reflex"] };
 function showSettingsPage(k) {
   state.settingsPage = k;
   $("#settingsNav").querySelectorAll(".sess").forEach(el => el.classList.toggle("active", el.dataset.k === k));
-  $("#settingsPane").querySelectorAll(".card[id^='s-']").forEach(card => { card.style.display = card.id === "s-" + k ? "" : "none"; });
+  const cards = PAGE_CARDS[k] || ["s-" + k];
+  $("#settingsPane").querySelectorAll(".card[id^='s-']").forEach(card => { card.style.display = cards.includes(card.id) ? "" : "none"; });
   const row = $("#sSaveRow"); if (row) row.style.display = CONFIG_PAGES.includes(k) ? "" : "none";
   $("#settingsPane").scrollTop = 0;
   const label = $("#settingsNav").querySelector(`.sess[data-k="${k}"]`)?.textContent || k;

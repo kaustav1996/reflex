@@ -37,7 +37,7 @@ import { buildPresetConfig, persistServer, removeConnector } from "../extensions
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
-import { answerLogin, cancelLogin, COMPAT_PRESETS, getLogin, listCompatProviders, listEndpointModels, logoutProvider, removeCompatProvider, saveCompatProvider, startLogin, storedAuthType, SUBSCRIPTION_LOGINS } from "../llm/providers.js";
+import { answerLogin, cancelLogin, COMPAT_PRESETS, currentDefault, EFFORTS, getLogin, listCompatProviders, listEndpointModels, logoutProvider, removeCompatProvider, saveCompatProvider, setDefaultModel, startLogin, storedAuthType, SUBSCRIPTION_LOGINS, usableModels } from "../llm/providers.js";
 import { asProvider, chosenProvider, JEV_LABEL, jevModelFor, jevRouteFor, listJevModels } from "../extensions/typesafe/provider.js";
 import { ghLogin, githubAuth } from "../artifacts/github.js";
 import { type ProviderName, startCliLogin } from "../artifacts/providers.js";
@@ -48,7 +48,7 @@ import { callLogStats, clearCalls, readCalls, type CallKind } from "../logs/call
 import { saveArtifact } from "../artifacts/store.js";
 
 /** LLM providers whose keys Pi stores in ~/.reflex/agent/auth.json. */
-const PI_AUTH_PROVIDERS = new Set(["openrouter", "anthropic", "google", "xai", "deepseek", "mistral"]);
+const PI_AUTH_PROVIDERS = new Set(["openrouter", "anthropic", "openai", "google", "groq", "xai", "deepseek", "mistral"]);
 
 /** Returns a reason when OpenRouter rejects the key; undefined when it is valid or the check could not run. */
 async function checkOpenRouterKey(key: string): Promise<string | undefined> {
@@ -626,7 +626,9 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				if (rejected.length) return json(res, 400, { error: `key not saved — ${rejected.join("; ")}` });
 				if (body.config) {
 					const cfg = loadCfg();
-					const merged = { ...cfg, ...body.config, reflex: { ...cfg.reflex, ...(body.config.reflex ?? {}), models: { ...(cfg.reflex.models ?? {}), ...((body.config.reflex as { models?: Record<string, string> } | undefined)?.models ?? {}) } }, voice: { ...cfg.voice, ...(body.config.voice ?? {}) }, browser: { ...cfg.browser, ...(body.config.browser ?? {}) }, ui: { ...cfg.ui, ...(body.config.ui ?? {}) }, llm: { ...cfg.llm, ...(body.config.llm ?? {}) } };
+					const merged = { ...cfg, ...body.config, reflex: { ...cfg.reflex, ...(body.config.reflex ?? {}), routing: { ...cfg.reflex.routing, ...((body.config.reflex as { routing?: Record<string, string> } | undefined)?.routing ?? {}) }, routingEffort: { ...(cfg.reflex.routingEffort ?? {}), ...((body.config.reflex as { routingEffort?: Record<string, string> } | undefined)?.routingEffort ?? {}) }, models: { ...(cfg.reflex.models ?? {}), ...((body.config.reflex as { models?: Record<string, string> } | undefined)?.models ?? {}) } }, voice: { ...cfg.voice, ...(body.config.voice ?? {}) }, browser: { ...cfg.browser, ...(body.config.browser ?? {}) }, ui: { ...cfg.ui, ...(body.config.ui ?? {}) }, llm: { ...cfg.llm, ...(body.config.llm ?? {}) } };
+					// A tier or effort sent as null was cleared in the UI.
+					for (const group of [merged.reflex.routing, merged.reflex.routingEffort] as Array<Record<string, unknown> | undefined>) if (group) for (const k of Object.keys(group)) if (group[k] === null || group[k] === "") delete group[k];
 					saveReflexConfig(merged);
 				}
 				return json(res, 200, { ok: true, shadowed });
@@ -800,6 +802,23 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			// ---- LLM access without an API key: subscription sign-in and OpenAI-compatible endpoints ----
 			if (url.pathname === "/api/llm" && req.method === "GET") {
 				return json(res, 200, { subscriptions: SUBSCRIPTION_LOGINS.map((p) => ({ ...p, auth: storedAuthType(p.id) ?? null })), endpoints: listCompatProviders(), presets: COMPAT_PRESETS });
+			}
+			if (url.pathname === "/api/llm/models" && req.method === "GET") {
+				// What System 2 can actually use right now: only providers with working credentials.
+				try {
+					return json(res, 200, { models: await usableModels(), default: currentDefault(), efforts: EFFORTS });
+				} catch (err) {
+					return json(res, 200, { models: [], default: currentDefault(), efforts: EFFORTS, error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/llm/default" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8")) as { ref?: string; effort?: string };
+				try {
+					setDefaultModel(body.ref ?? "", body.effort as never);
+					return json(res, 200, { ok: true, default: currentDefault() });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
 			}
 			if (url.pathname === "/api/llm/login" && req.method === "POST") {
 				const body = JSON.parse((await readBody(req)).toString("utf8")) as { provider?: string };

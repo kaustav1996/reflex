@@ -41,6 +41,13 @@ export function registerRouter(pi: ExtensionAPI, state: ReflexState): void {
 			state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}% → ${target ?? "(unchanged)"}`);
 			if (!target || answer.confidence < 0.6) return undefined;
 			await switchModel(pi, ctx, state, target, answer.choice, answer.confidence);
+			const effort = policy.routingEffort?.[answer.choice as keyof typeof tiers] ?? (tiers[answer.choice as keyof typeof tiers] ? undefined : policy.routingEffort?.default);
+			if (effort && effort !== ctx.thinkingLevel) {
+				try {
+					pi.setThinkingLevel(effort as never);
+					state.record("route", `effort → ${effort} (${answer.choice} tier)`);
+				} catch {}
+			}
 		} catch (err) {
 			state.degradedReason = err instanceof Error ? err.message : String(err);
 		}

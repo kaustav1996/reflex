@@ -38,7 +38,7 @@ and what came back.
 | Action gate on every `bash`, `edit`, `write`, `computer`, `browse` and connector call | destructive? outside the workspace? touches secrets? external side effect? needs privileges? matches what the user asked? plus a 0 to 3 risk rubric with confidence | allow, ask or block according to your risk appetite (cautious, balanced, bold). There are no static allowlists: `npm test` passes on its own and `git push --force` gets a question. Code makes protected paths ask whatever Jev answers. |
 | Progress monitor after each turn | looping? ignoring an error? stuck? | nudges the model to change approach (rate-limited) and warns you when it thrashes |
 | Completion check when the agent stops | claims done? actually verified? scope drift? waiting on you? | a "done" without verification is sent back to run the tests and report real output |
-| Model router before each request | fast / default / strong tier? | switches the model per request when confident, for example a cheap model for a rename and a strong one for "why does it crash under load" |
+| Model router before each request | fast / default / strong tier? | switches the model and the thinking effort per request when confident, for example a cheap model at low effort for a rename and a strong one at high effort for "why does it crash under load" |
 | Skill and connector selector before each request | which bundled skill, which connected MCP server is relevant? (with "none" escapes) | injects a `<relevance>` hint so the model reads the right skill and reaches for the right tools |
 | Voice intent on every transcript | task, control, answer or chatter? a complete thought? | "stop" aborts, an answer reaches the agent, background speech is dropped, half-sentences land in the editor |
 | Browser agent (`browse`) | per step: which operation? which element? irreversible? needs credentials? | drives Chrome at ~200 ms per step (ported from [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast)); stops before payments, sends and deletes; never types passwords |
@@ -123,7 +123,7 @@ reflex --model openrouter/moonshotai/kimi-k2.7-code   # any Pi flag works
 
 | In a session | |
 |---|---|
-| `/reflex` | policy: `appetite cautious\|balanced\|bold`, `provider typesafe\|openrouter`, `model [id]`, `gate`, `monitor`, `route`, `select`, `verbose`, `routing fast=… default=… strong=…`, `stats`, `last` |
+| `/reflex` | policy: `appetite cautious\|balanced\|bold`, `provider typesafe\|openrouter`, `model [id]`, `gate`, `monitor`, `route`, `select`, `verbose`, `routing fast=provider/model@effort …`, `stats`, `last` |
 | `/voice` or ctrl+shift+v | push-to-talk; Enter transcribes, Esc cancels; `/voice send`, `/voice lang hi-IN`, `/voice translate`, `/voice provider groq` |
 | `/browse <goal>` | run a web task with the System One browser agent and watch the steps |
 | `/computer on` | `screenshot` and `computer` tools: open apps, read the accessibility tree, click, type, AppleScript; every action gated |
@@ -146,9 +146,16 @@ are queued, and a stop button appears beside send. Sessions running in a termina
 live read-only transcripts, and earlier sessions can be resumed in a tab.
 
 The Agents tab holds scheduled, webhook-driven and chained jobs with their runs and logs. The
-Artifacts tab deploys app folders to your own Netlify and Render accounts. Settings, at the
-bottom of the sidebar next to the light/dark toggle, has one page each for keys, reflex policy,
-voice, browser, look, artifact defaults, packages, skills, connectors and the call logs.
+Artifacts tab deploys app folders to your own Netlify and Render accounts.
+
+Settings sits at the bottom of the sidebar next to the light/dark toggle, and follows the same
+split as the agent. "System 2 · LLM" is where the language model comes from: API keys,
+subscription sign-ins and OpenAI-compatible endpoints, then the default model and thinking effort,
+chosen from the models those credentials can use. "System 1 · Reflex" is Jev: where to reach it
+and which Jev model, the TypeSafe key when Jev is reached directly, the policy, and the routing
+tiers. Each tier is a model and an effort picked from System 2's usable models, and a tier that
+leaves your default provider is flagged. The remaining pages cover voice, browser, look, artifact
+defaults, packages, skills, connectors and the call logs.
 
 ## Agents and workflows
 

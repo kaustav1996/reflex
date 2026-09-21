@@ -99,7 +99,7 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 				`jev: ${state.route ? `${theme.fg("accent", JEV_LABEL[state.route.provider])} · model ${theme.fg("accent", state.route.model)}${state.route.chosen ? "" : theme.fg("warning", "  (provider not chosen yet: /reflex provider typesafe|openrouter)")}` : theme.fg("warning", `unreachable: ${missingJevHint(state.config, state.keys)}`)}`,
 				`appetite: ${theme.fg("accent", p.riskAppetite)}   gate: ${onOff(p.gateToolCalls)}   monitor: ${onOff(p.monitorProgress)}   route: ${onOff(p.routeModels)}   verbose: ${onOff(p.verbose)}`,
 				`timeout: ${p.timeoutMs}ms   protected: ${p.protectedPaths.length} patterns`,
-				`routing: fast=${p.routing.fast ?? "-"}  default=${p.routing.default ?? "-"}  strong=${p.routing.strong ?? "-"}`,
+				`routing: ${(["fast", "default", "strong"] as const).map((t) => `${t}=${p.routing[t] ?? "-"}${p.routingEffort?.[t] ? `@${p.routingEffort[t]}` : ""}`).join("  ")}`,
 				theme.fg("dim", "usage: /reflex appetite <cautious|balanced|bold> · gate on|off · monitor on|off · route on|off · provider typesafe|openrouter · model [id] · routing fast=<provider/model> … · stats · last"),
 			];
 			ctx.ui.setWidget("reflex-info", lines);
@@ -137,7 +137,13 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 		case "routing": {
 			for (const kv of rest) {
 				const [k, v] = kv.split("=");
-				if ((k === "fast" || k === "default" || k === "strong") && v) p.routing[k] = v;
+				if ((k === "fast" || k === "default" || k === "strong") && v) {
+					// fast=provider/model@low sets the tier's model and its thinking effort
+					const at = v.lastIndexOf("@");
+					const effort = at > 0 ? v.slice(at + 1).toLowerCase() : undefined;
+					p.routing[k] = at > 0 ? v.slice(0, at) : v;
+					if (effort) p.routingEffort = { ...(p.routingEffort ?? {}), [k]: effort };
+				}
 			}
 			if (rest.length === 0) say("usage: /reflex routing fast=openrouter/google/gemini-3.1-flash-lite-preview default=openrouter/anthropic/claude-sonnet-4.6 strong=openrouter/anthropic/claude-opus-4.7", "info");
 			break;

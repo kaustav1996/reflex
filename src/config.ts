@@ -74,6 +74,8 @@ export interface ReflexPolicyConfig {
 	model: string;
 	/** Where Jev is called, chosen by the user: TypeSafe's API or OpenRouter's System One endpoint. Unset until chosen. */
 	provider?: "typesafe" | "openrouter";
+	/** Thinking effort per routing tier (off, minimal, low, medium, high, xhigh, max); unset = leave the session's effort alone. */
+	routingEffort?: { fast?: string; default?: string; strong?: string };
 	/** The Jev model per provider (ids differ: `jev-preview` on TypeSafe, `typesafe/jev-1.13` on OpenRouter). */
 	models?: { typesafe?: string; openrouter?: string };
 	/** Hard timeout for a single Jev request. On timeout the gate falls back to "ask". */
