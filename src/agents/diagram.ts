@@ -22,7 +22,10 @@ export interface DiagramNode {
 export interface DiagramEdge {
 	from: string;
 	to: string;
+	/** The full condition (or "otherwise" / "on success"). */
 	label?: string;
+	/** What fits on the drawing: `gate.ready.choice == "awaiting_info"` → `awaiting_info`. */
+	short?: string;
 	kind: "flow" | "route" | "default" | "chain";
 }
 
@@ -44,6 +47,25 @@ export const KIND_LABEL: Record<NodeKind, string> = {
 };
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+const OPS: Record<string, string> = { ">=": "≥", "<=": "≤", "!=": "≠", "==": "=", ">": ">", "<": "<" };
+
+/**
+ * A route condition short enough to label an edge. A choice compared with a value is named by
+ * the value; anything else keeps the question name, the operator and the value. The full
+ * condition stays in `label` for tooltips and the detail panel.
+ */
+export function shortCondition(when: string): string {
+	if (when === "default") return "otherwise";
+	const m = when.trim().match(/^([\w-]+)(?:\.([\w-]+))?(?:\.([\w-]+))?\s*(>=|<=|!=|==|>|<)\s*(.+)$/);
+	if (!m) return clip(when, 24);
+	const [, step, question, field, op, raw] = m;
+	const value = raw.trim().replace(/^["']|["']$/g, "");
+	if (field === "choice" && op === "==") return clip(value, 24);
+	if (field === "choice" && op === "!=") return clip(`not ${value}`, 24);
+	const name = field ? question : question ? `${step}.${question}` : step;
+	return clip(`${name} ${OPS[op]} ${value}`, 24);
+}
 
 type NamedStep = Step & { id: string };
 
@@ -94,7 +116,7 @@ export function agentDiagram(agent: AgentDefinition): Diagram {
 			}
 			const targets: DiagramEdge[] = [];
 			if (s.route?.length) {
-				for (const r of s.route) targets.push({ from: s.id, to: r.next, label: r.when === "default" ? "otherwise" : r.when, kind: r.when === "default" ? "default" : "route" });
+				for (const r of s.route) targets.push({ from: s.id, to: r.next, label: r.when === "default" ? "otherwise" : r.when, short: shortCondition(r.when), kind: r.when === "default" ? "default" : "route" });
 			} else if (s.next) targets.push({ from: s.id, to: s.next, kind: "flow" });
 			else targets.push({ from: s.id, to: steps[i + 1]?.id ?? "__end", kind: "flow" });
 			for (const e of targets) {
