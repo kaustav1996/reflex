@@ -5,7 +5,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { loadMcpConfig, McpClient, type McpContent } from "./client.js";
+import { loadMcpConfig, McpClient, type McpContent, toolPrefix } from "./client.js";
 
 export function createMcpExtension(): (pi: ExtensionAPI) => void {
 	return (pi) => {
@@ -32,7 +32,7 @@ export function createMcpExtension(): (pi: ExtensionAPI) => void {
 		}
 
 		function registerTool(server: string, client: McpClient, tool: { name: string; description?: string; inputSchema: Record<string, unknown> }): void {
-			const name = `${server}__${tool.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+			const name = `${toolPrefix(server)}__${tool.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
 			if (registered.has(name)) return;
 			registered.add(name);
 			pi.registerTool({

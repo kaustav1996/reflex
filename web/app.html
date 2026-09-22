@@ -712,6 +712,18 @@
   .mroute summary { cursor: pointer; font-weight: 700; }
   .mtiers { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 8px; align-items: center; margin: 8px 0; }
   .mtiers select { font: inherit; padding: 4px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); min-width: 0; max-width: 100%; }
+  #stagingBar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 10px; border: 2px solid var(--pink); margin: 0 0 6px; font-size: 12px; background: var(--paper); }
+  #stagingBar[hidden] { display: none; }
+  .agent-import { display: flex; gap: 8px; align-items: center; padding: 4px 6px 8px; }
+  #agentsList.drop { outline: 2px dashed var(--pink); outline-offset: -4px; }
+  .share-params { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+  .share-row { display: grid; grid-template-columns: auto minmax(0, 2fr) auto minmax(90px, 1fr) minmax(120px, 2fr); gap: 6px; align-items: center; }
+  .share-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .share-row input[type=text], .share-row input:not([type]), .share-meta input { font: inherit; padding: 3px 5px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); min-width: 0; }
+  .share-effects { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 12px; margin: 6px 0; }
+  .share-effects select { font: inherit; margin-left: 6px; }
+  .share-meta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .share h3 { margin: 12px 0 2px; }
   .rec-card { border: 1px solid var(--line); padding: 10px; margin: 6px 0 10px; box-shadow: 2px 2px 0 var(--pink); }
   .rec-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
   .conn-src { font-size: 9px; font-weight: 700; letter-spacing: .04em; border: 1px solid var(--gray); color: var(--gray); padding: 0 3px; vertical-align: middle; }
@@ -784,6 +796,7 @@ __REFLEX_STALE__
     </div>
     <div class="view on" id="chatView">
       <div id="chat"><div class="empty">Create a session to start.<br><br>Each session is a full Reflex agent: System One reflex layer, <code>/browse</code>, <code>/computer</code>, voice.</div></div>
+      <div id="stagingBar" hidden></div>
       <div id="status"></div>
       <div id="composer">
         <div id="composerWrap">
@@ -918,10 +931,10 @@ async function newSession() {
   await startIn(cwd);
 }
 /** Folder browser: recent projects, then navigate directories; no typing required. */
-function pickFolder() {
+function pickFolder(title) {
   return new Promise(async resolve => {
     const o = $("#overlay"); o.classList.add("show");
-    $("#dTitle").textContent = "New session — choose a project folder"; $("#dBody").innerHTML = "";
+    $("#dTitle").textContent = title || "New session — choose a project folder"; $("#dBody").innerHTML = "";
     const opts = $("#dOpts"), row = $("#dRow"); opts.innerHTML = ""; row.innerHTML = "";
     const body = $("#dBody");
     let recent = [], cur = null;
@@ -1035,7 +1048,7 @@ const stripAnsi = s => String(s).replace(/\x1b\[[0-9;]*m/g, "");
 const contentText = c => typeof c === "string" ? c : (c || []).map(x => x.type === "text" ? x.text : x.type === "image" ? "[image]" : "").join("");
 const resultText = r => (r?.content || []).map(x => x.type === "text" ? x.text : "").join("\n");
 
-const STEP_LABEL = { shell: "shell", decide: "TypeSafe decide", llm: "LLM", call: "agent call", end: "end" };
+const STEP_LABEL = { shell: "shell", decide: "TypeSafe decide", llm: "LLM", call: "agent call", spawn: "helper agent", end: "end" };
 // ── tool rows (grouped, collapsible) ─────────────────────────────────────
 function describeTool(t) {
   const a = t.args || {}, c = s => `<code>${esc(String(s).slice(0, 90))}</code>`;
@@ -1087,6 +1100,7 @@ function wireToolRows(root, items, v, repaint) {
 let raf = 0;
 function render() { cancelAnimationFrame(raf); raf = requestAnimationFrame(paint); }
 function paint() {
+  if (state.tab === "sessions") drawStagingBar();
   const id = state.current, v = id ? view(id) : null, chat = $("#chat");
   const s = id && id.startsWith("web:") ? state.sessions.find(x => "web:" + x.id === id) : id ? state.terminal.find(x => "term:" + x.pid === id) : null;
   if (state.tab === "sessions") { $("#title").textContent = s ? `${s.title || "New session"} · ${s.cwd.replace("__REFLEX_HOME__", "~")}${id.startsWith("term:") ? " · live in terminal (read-only)" : ""}` : "no session"; $("#title").title = s ? s.cwd : ""; }
@@ -1126,6 +1140,126 @@ function showDialog(ev) {
   const c2 = document.createElement("button"); c2.className = "b"; c2.textContent = "Dismiss"; c2.onclick = () => answer({ cancelled: true }); if (ev.method === "select") row.appendChild(c2);
 }
 function hideDialog() { $("#overlay").classList.remove("show"); }
+/** A dialog with a message and buttons; resolves with the chosen button's value (null on cancel). */
+function chooseDialog(title, bodyHtml, buttons) {
+  return new Promise(resolve => {
+    $("#overlay").classList.add("show"); $("#dTitle").textContent = title; $("#dBody").innerHTML = bodyHtml; $("#dOpts").innerHTML = "";
+    const row = $("#dRow"); row.innerHTML = "";
+    for (const b of [{ label: "Cancel", value: null }, ...buttons]) { const el = document.createElement("button"); el.className = "b" + (b.primary ? " primary" : ""); el.textContent = b.label; el.onclick = () => { hideDialog(); resolve(b.value); }; row.appendChild(el); }
+  });
+}
+
+// ── sharing agents: import a bundle into a review session, share (export) an agent ─────────
+const isBundleFile = f => /\.reflex-agent\.json$/i.test(f.name || "");
+function importKickoff(id, name) { return `I'm importing the shared agent "${name}" (staged as ${id}). Review it with me using the reflex-agent-import skill: explain what it does, set it up for this machine, check what it needs, and trial-run it when I say so. Don't add it until I decide.`; }
+function rememberStaging(key, id) { view(key).stagingId = id || null; try { id ? sessionStorage.setItem("reflex-staging:" + key, id) : sessionStorage.removeItem("reflex-staging:" + key); } catch {} }
+function stagingOf(key) { const v = view(key); if (v.stagingId === undefined) { try { v.stagingId = sessionStorage.getItem("reflex-staging:" + key) || null; } catch { v.stagingId = null; } } return v.stagingId; }
+/** A reopened tab loses sessionStorage: adopt the one agent still staged in this session's folder. */
+async function adoptStaging(key) {
+  const s = state.sessions.find(x => "web:" + x.id === key); if (!s) return null;
+  try {
+    const { staged } = await api("/api/agents/staging");
+    const mine = staged.filter(x => x.cwd === s.cwd);
+    if (mine.length !== 1) return null;
+    rememberStaging(key, mine[0].id);
+    return mine[0].id;
+  } catch { return null; }
+}
+async function readBundle(file) {
+  let bundle; try { bundle = JSON.parse(await file.text()); } catch { notice("error", `${file.name} isn't JSON`); return null; }
+  if (bundle?.reflexAgent !== 1) { notice("error", `${file.name} isn't a Reflex agent bundle`); return null; }
+  return bundle;
+}
+/** Import from the Agents tab: a folder is required, then a new session reviews the bundle in it. */
+async function importAgentFile(file) {
+  const bundle = await readBundle(file); if (!bundle) return;
+  const cwd = await pickFolder(`Import "${bundle.meta?.name || file.name}": choose the folder to review it in`);
+  if (!cwd) return notice("info", "import cancelled: a review session needs a folder");
+  try {
+    const st = await api("/api/agents/staging", { method: "POST", body: JSON.stringify({ bundle, source: file.name, cwd }), headers: { "Content-Type": "application/json" } });
+    const s = await api("/api/sessions", { method: "POST", body: JSON.stringify({ cwd }), headers: { "Content-Type": "application/json" } });
+    state.lastCwd = cwd; setTab("sessions"); await refreshSessions(); selectSession("web:" + s.id);
+    rememberStaging("web:" + s.id, st.id); drawStagingBar(true);
+    await rpc({ type: "prompt", message: importKickoff(st.id, st.name) });
+  } catch (e) { notice("error", "import failed: " + e.message); }
+}
+let stagingPolledAt = 0;
+/** The bar above the chat while a session reviews a shared agent: status, diagram, Add agent, Discard. */
+async function drawStagingBar(force) {
+  const bar = $("#stagingBar"); const key = state.current;
+  const here = key && key.startsWith("web:") && state.tab !== "agents";
+  const id = here ? stagingOf(key) || (view(key).stagingAdopted ? null : await adoptStaging(key)) : null;
+  if (here) view(key).stagingAdopted = true;
+  const v = key ? view(key) : null;
+  if (!id) { if (v?.stagingDone) { bar.hidden = false; bar.innerHTML = v.stagingDone; wireStagingDone(); } else bar.hidden = true; return; }
+  if (!force && Date.now() - stagingPolledAt < 4000 && bar.dataset.id === id && !bar.hidden) return;
+  stagingPolledAt = Date.now();
+  let st;
+  try { st = await api(`/api/agents/staging/${id}`); }
+  catch { rememberStaging(key, null); bar.hidden = false; bar.innerHTML = `<span>The shared agent is no longer staged: it was added or discarded.</span><span style="flex:1"></span><button class="b small" id="sbClose">✕</button>`; $("#sbClose").onclick = () => { bar.hidden = true; }; return; }
+  if (state.current !== key) return;
+  bar.dataset.id = id; bar.hidden = false;
+  const set = st.params.filter(p => p.value).length;
+  const skipped = st.trial ? st.trial.steps.filter(x => x.skipped).length : 0;
+  const trial = st.trial ? (st.trial.status === "succeeded" ? `trial passed${skipped ? ` (${skipped} external step${skipped > 1 ? "s" : ""} not run)` : ""}` : `trial ${st.trial.status}`) : "no trial yet";
+  bar.innerHTML = `<span class="sb-title">⇪ Reviewing shared agent <b>${esc(st.name)}</b>${st.version ? ` v${esc(st.version)}` : ""}</span><span class="hint">${set}/${st.params.length} parameters set · ${esc(trial)}</span><span style="flex:1"></span><button class="b small" id="sbDiagram">diagram</button><button class="b small primary" id="sbAdd">Add agent</button><button class="b small" id="sbDiscard">Discard</button>`;
+  $("#sbDiagram").onclick = async () => {
+    const d = await api(`/api/agents/staging/${id}/diagram`);
+    chooseDialog(`${st.name}: workflow`, `<div id="sbDiagramMount"></div>`, []); drawDiagram(d.diagram, $("#sbDiagramMount"), d.steps);
+  };
+  $("#sbAdd").onclick = async () => {
+    const fresh = await api(`/api/agents/staging/${id}`);
+    if (fresh.problems.length) return chooseDialog("Not ready to add yet", `<ul>${fresh.problems.map(x => `<li>${esc(x)}</li>`).join("")}</ul><div class="hint">Ask the session to set these up, then add it.</div>`, []);
+    const body = `<p>${fresh.trial ? `Last trial: <b>${esc(fresh.trial.status)}</b>.` : "It hasn't had a trial run yet."} Added agents keep the reflex gate on.</p>${fresh.warnings.length ? `<ul>${fresh.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}`;
+    const choice = await chooseDialog(`Add "${fresh.name}" to your agents?`, body, [{ label: "Add (disabled)", value: "off", primary: true }, { label: "Add and enable", value: "on" }]);
+    if (!choice) return;
+    try {
+      const r = await api(`/api/agents/staging/${id}/install`, { method: "POST", body: JSON.stringify({ enable: choice === "on" }), headers: { "Content-Type": "application/json" } });
+      rememberStaging(key, null);
+      v.stagingDone = `<span>✓ Added <b>${esc(r.agent.name)}</b> as <code>${esc(r.agent.id)}</code> (${r.agent.enabled ? "enabled" : "disabled"})</span><span style="flex:1"></span><button class="b small" id="sbOpen" data-agent="${esc(r.agent.id)}">open agent</button><button class="b small" id="sbClose">✕</button>`;
+      notice("info", `added agent ${r.agent.id}`); drawStagingBar(true);
+    } catch (e) { notice("error", e.message); }
+  };
+  $("#sbDiscard").onclick = async () => {
+    if (!(await chooseDialog(`Discard "${st.name}"?`, "<p>The staged copy and its trial runs are deleted. The bundle file itself is kept.</p>", [{ label: "Discard", value: true, primary: true }]))) return;
+    await api(`/api/agents/staging/${id}/discard`, { method: "POST" }).catch(e => notice("error", e.message));
+    rememberStaging(key, null); bar.hidden = true;
+  };
+}
+function wireStagingDone() {
+  const open = $("#sbOpen"); if (open) open.onclick = () => { setTab("agents"); openAgent(open.dataset.agent); };
+  const close = $("#sbClose"); if (close) close.onclick = () => { if (state.current) view(state.current).stagingDone = null; $("#stagingBar").hidden = true; };
+}
+/** Share: pick which values become parameters (Jev's suggestions pre-ticked), check effects, download the bundle. */
+async function openShareDialog(a) {
+  $("#overlay").classList.add("show"); $("#dTitle").textContent = `Share ${a.name}`; $("#dOpts").innerHTML = ""; $("#dRow").innerHTML = "";
+  $("#dBody").innerHTML = `<div class="hint">Finding the values that tie this agent to your machine…</div>`;
+  let d;
+  try { d = await api(`/api/agents/${a.id}/export/prepare`, { method: "POST" }); } catch (e) { $("#dBody").innerHTML = `<div class="notice error">${esc(e.message)}</div>`; return; }
+  const effOpts = x => ["read", "local", "external"].map(o => `<option${o === x ? " selected" : ""}>${o}</option>`).join("");
+  const r = d.requires;
+  $("#dBody").innerHTML = `<div class="share">
+    <div class="hint">Ticked values become parameters the importer fills in with their own. The score is Jev's estimate that someone else would have to replace it. Secrets are never included, only their names.</div>
+    <div class="share-params">${d.candidates.map((c, i) => `<label class="share-row"><input type="checkbox" data-i="${i}" ${(c.score ?? 0) >= 0.5 ? "checked" : ""}><code title="${esc(c.context)}">${esc(c.value)}</code><span class="hint">${esc(c.type)} · ×${c.count} · ${Math.round((c.score ?? 0) * 100)}%</span><input data-id="${i}" value="${esc(c.suggestedId)}" spellcheck="false"><input data-desc="${i}" placeholder="What the importer should put here" value="${esc(c.type === "dir" ? "Folder on your machine for this" : "")}"></label>`).join("") || '<div class="hint">No machine-specific values found.</div>'}</div>
+    ${d.steps.length ? `<h3>What each step can change</h3><div class="hint">A trial run skips external steps. Jev suggested these; untagged steps count as external.</div><div class="share-effects">${d.steps.map(st => `<label><code>${esc(st.id)}</code> <span class="hint">${esc(st.type)}</span><select data-eff="${esc(st.id)}">${effOpts(d.effects[st.id]?.effect || "external")}</select></label>`).join("")}</div>` : ""}
+    <h3>It needs</h3><div class="hint">connectors: ${r.connectors.map(c => `${esc(c.id)} (${esc(c.service)})`).join(", ") || "none"} · CLIs: ${r.clis.map(c => esc(c.name)).join(", ") || "none"} · secrets: ${r.secrets.map(x => esc(x.name)).join(", ") || "none"} · Jev: ${r.jev ? "yes" : "no"}</div>
+    ${r.warnings.length ? `<div class="notice warning">${r.warnings.map(esc).join("<br>")}</div>` : ""}
+    <div class="share-meta"><label>author <input id="shAuthor" spellcheck="false"></label><label>version <input id="shVersion" value="1.0.0" spellcheck="false"></label><label>trial input <input id="shTrial" placeholder="optional {{input}} for the importer's trial"></label></div></div>`;
+  const cancel = document.createElement("button"); cancel.className = "b"; cancel.textContent = "Cancel"; cancel.onclick = hideDialog;
+  const go = document.createElement("button"); go.className = "b primary"; go.textContent = "Download bundle";
+  go.onclick = async () => {
+    const params = d.candidates.map((c, i) => ({ c, i })).filter(({ i }) => $(`[data-i="${i}"]`).checked).map(({ c, i }) => ({ id: $(`[data-id="${i}"]`).value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_"), type: c.type, description: $(`[data-desc="${i}"]`).value.trim() || `Your own value (the author's was ${c.value})`, value: c.value }));
+    const effects = Object.fromEntries([...document.querySelectorAll("[data-eff]")].map(el => [el.dataset.eff, el.value]));
+    try {
+      const out = await api(`/api/agents/${a.id}/export`, { method: "POST", body: JSON.stringify({ params, effects, meta: { author: $("#shAuthor").value.trim() || undefined, version: $("#shVersion").value.trim() || "1.0.0" }, trialInput: $("#shTrial").value.trim() || undefined }), headers: { "Content-Type": "application/json" } });
+      const blob = new Blob([JSON.stringify(out.bundle, null, 2) + "\n"], { type: "application/json" });
+      const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${a.id}.reflex-agent.json`; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+      hideDialog(); notice("info", `downloaded ${a.id}.reflex-agent.json · ${out.bundle.params.length} parameters`);
+      for (const w of out.warnings.filter(w => /Still contains/.test(w))) notice("warning", w);
+    } catch (e) { notice("error", e.message); }
+  };
+  $("#dRow").append(cancel, go);
+}
 
 // ── credential form: values go straight to .env via the extension, never into the chat ──
 function secretForm(ev, answer) {
@@ -1234,6 +1368,14 @@ async function sendInput() {
   const v = view(state.current);
   // Non-image attachments: small text files inline, everything else uploaded and referenced by path.
   for (const f of pending.files) {
+    if (isBundleFile(f)) {
+      // A shared agent dropped into this session: stage it and review it here, in this session's folder.
+      const bundle = await readBundle(f); if (!bundle) continue;
+      const cwd = state.sessions.find(x => "web:" + x.id === state.current)?.cwd;
+      try { const st = await api("/api/agents/staging", { method: "POST", body: JSON.stringify({ bundle, source: f.name, cwd }), headers: { "Content-Type": "application/json" } }); rememberStaging(state.current, st.id); drawStagingBar(true); text += `\n\n${importKickoff(st.id, st.name)}`; }
+      catch (e) { notice("error", "import failed: " + e.message); }
+      continue;
+    }
     const textLike = /^text\/|json|xml|javascript|typescript|yaml|csv|markdown/.test(f.type) || /\.(md|txt|ts|tsx|js|jsx|py|go|rs|java|json|ya?ml|toml|csv|sql|sh|css|html|env|log)$/i.test(f.name);
     if (textLike && f.size < 200 * 1024) text += `\n\n<attachment name="${f.name}">\n${await f.text()}\n</attachment>`;
     else { const r = await fetch(`/api/sessions/${state.current.slice(4)}/upload?name=${encodeURIComponent(f.name)}`, { method: "POST", headers: { "x-reflex-token": TOKEN }, body: f }); const j = await r.json(); if (!r.ok) return notice("error", j.error || "upload failed"); text += `\n\n(attached file saved at ${j.path})`; }
@@ -1359,7 +1501,15 @@ async function refreshAgents() {
     div.onclick = () => openBrokenAgent(b.id);
     box.appendChild(div);
   }
-  if (!agents.length && !broken.length) box.innerHTML = `<div class="empty" style="padding:20px">No agents yet.<br>Press <b>+ agent</b>.</div>`;
+  if (!agents.length && !broken.length) box.insertAdjacentHTML("beforeend", `<div class="empty" style="padding:20px">No agents yet.<br>Press <b>+ agent</b>, or import one someone shared.</div>`);
+  const imp = document.createElement("div"); imp.className = "agent-import";
+  imp.innerHTML = `<button class="b small" id="agImport" title="Import a shared agent (.reflex-agent.json); a session reviews it with you first">⇪ import agent</button><input type="file" id="agImportFile" accept=".json,application/json" style="display:none">`;
+  box.prepend(imp);
+  $("#agImport").onclick = () => $("#agImportFile").click();
+  $("#agImportFile").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importAgentFile(f); };
+  box.ondragover = e => { e.preventDefault(); box.classList.add("drop"); };
+  box.ondragleave = () => box.classList.remove("drop");
+  box.ondrop = e => { e.preventDefault(); e.stopPropagation(); box.classList.remove("drop"); const f = [...(e.dataTransfer?.files || [])][0]; if (f) importAgentFile(f); };
 }
 /** An agent whose agent.json doesn't parse: say where it broke and how to fix it, instead of a blank page. */
 function openBrokenAgent(id) {
@@ -1384,7 +1534,7 @@ async function openAgent(id, runId) {
     await refreshAgents();
     if ((state.brokenAgents || []).some(b => b.id === id)) return openBrokenAgent(id);
     $("#agentPane").innerHTML = `<div class="card"><h3>Couldn't open ${esc(id)}</h3><div class="hint">${esc(e.message)}</div></div>`; return;
-  } state.agent = data.agent; state.agentRuns = data.runs; state.agentLive = data.live; state.agentDiagram = data.diagram; state.agentMermaid = data.mermaid;
+  } state.agent = data.agent; state.agentChildren = data.children || []; state.agentRuns = data.runs; state.agentLive = data.live; state.agentDiagram = data.diagram; state.agentMermaid = data.mermaid;
   $("#title").textContent = state.agent.name;
   refreshAgents();
   try { renderAgent(runId); }
@@ -1539,12 +1689,14 @@ function diagramDetail(n, d, steps) {
     body = row("asks Jev", q + fe) + row("state", step.state && pre(step.state));
   } else if (step?.type === "llm") body = row("prompt", `<div class="wf-text">${e(step.prompt)}</div>`) + row("tools", (step.tools || []).length ? step.tools.map(t => `<span class="chip">${e(t)}</span>`).join("") : "all") + row("model", step.model && e(step.model));
   else if (step?.type === "call") body = row("runs agent", e(step.agentId)) + row("input", step.input && pre(step.input));
+  else if (step?.type === "spawn") body = row("action", e(step.action || "create")) + row("template", step.template && e(step.template)) + row("helper id", step.agent && `<code>${e(step.agent)}</code>`) + row("with", step.with && pre(step.with));
   else if (step?.type === "end") body = row("output", step.output && pre(step.output));
   else body = row("details", e(n.detail || ""));
   const out = d.edges.filter(x => x.from === n.id);
   const into = d.edges.filter(x => x.to === n.id);
   const routes = out.length ? `<ul class="wf-routes">${out.map(x => `<li>${x.label ? `<code>${e(x.label)}</code> → ` : "then → "}<a href="#" data-goto="${e(x.to)}">${label(x.to)}</a></li>`).join("")}</ul>` : "";
   const from = into.length ? into.map(x => `<a href="#" data-goto="${e(x.from)}">${label(x.from)}</a>`).join(", ") : "";
+  if (step) body = row("effect", step.effect ? e(step.effect) : (step.type === "decide" || step.type === "end" ? "read" : "external (untagged)")) + body;
   return `<div class="wf-detail-head"><span class="chip" style="background:${WF_FILL[n.kind]};color:${["shell", "llm", "call", "end"].includes(n.kind) ? "#fefefe" : "#1e1e1e"}">${e(WF_KIND[n.kind])}</span><b>${e(n.label)}</b><span style="flex:1"></span><button class="b small wf-close" title="close">✕</button></div>
     <div class="conn-meta wf-meta">${body}${row("next", routes)}${row("comes from", from)}${row("notes", (n.badges || []).map(b => `<span class="chip">${e(b)}</span>`).join(""))}</div>`;
 }
@@ -1558,17 +1710,20 @@ function renderAgent(runId) {
   const triggersHtml = trig.length ? trig.map(t => t.type === "cron" ? `<div>⏰ <b>${esc(t.schedule)}</b> <span class="hint">${esc(t.input || "")}</span></div>` : `<div>🔗 <span class="hook">POST http://127.0.0.1:${location.port}/hooks/${a.id}/${esc(t.secret)}</span> <span class="hint">JSON {"input": …} or text</span></div>`).join("") : `<span class="hint">manual only</span>`;
   const runs = state.agentRuns || [];
   pane.innerHTML = `<div class="card"><h3>${esc(a.name)} ${a.enabled ? '<span class="ok">enabled</span>' : '<span class="bad">disabled</span>'}</h3>
-    <div class="kv"><span>id</span><span>${a.id}</span><span>folder</span><span>${esc(a.cwd)}</span><span>model</span><span>${esc(a.model || "default")}</span><span>reflex</span><span>${a.reflex || "balanced"}</span><span>limits</span><span>${a.limits ? Object.entries(a.limits).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => `${k.replace(/^max/, "").replace("CostUsd", "$").replace("JevCalls", "TypeSafe calls ").replace("LlmRuns", "LLM runs ").replace("Steps", "steps ")}${k === "maxCostUsd" ? v : "≤ " + v}`).join(" · ") : '<span class="hint">none set: only the 200-step guard and the timeout</span>'}</span><span>tools</span><span>${(a.tools || []).join(", ") || "all"}${a.computer ? " + computer" : ""}</span>${a.steps ? `<span>steps</span><span>${a.steps.map((st, i) => `${i + 1}. <b>${esc(st.id || "step" + (i + 1))}</b> [${st.type}]${st.route ? " ⇢ " + st.route.map(r => esc(r.next)).join("/") : ""}`).join("<br>")}</span>` : `<span>prompt</span><span style="white-space:pre-wrap">${esc(a.prompt)}</span>`}${a.instructions ? `<span>instructions</span><span style="white-space:pre-wrap">${esc(a.instructions)}</span>` : ""}<span>triggers</span><span>${triggersHtml}</span>${(a.chain || []).length ? `<span>chain</span><span>${a.chain.map(c => `→ ${esc(c.agentId)}`).join(" ")}</span>` : ""}</div>
-    <div class="rowbtns"><button class="b primary small" id="aRun">▶ run now</button><button class="b small" id="aEdit">edit</button><button class="b small" id="aToggle">${a.enabled ? "disable" : "enable"}</button><button class="b small danger" id="aDelete">delete</button></div></div>
+    <div class="kv"><span>id</span><span>${a.id}</span><span>folder</span><span>${esc(a.cwd)}</span><span>model</span><span>${esc(a.model || "default")}</span><span>reflex</span><span>${a.reflex || "balanced"}</span><span>limits</span><span>${a.limits ? Object.entries(a.limits).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => `${k.replace(/^max/, "").replace("CostUsd", "$").replace("JevCalls", "TypeSafe calls ").replace("LlmRuns", "LLM runs ").replace("Steps", "steps ")}${k === "maxCostUsd" ? v : "≤ " + v}`).join(" · ") : '<span class="hint">none set: only the 200-step guard and the timeout</span>'}</span><span>tools</span><span>${(a.tools || []).join(", ") || "all"}${a.computer ? " + computer" : ""}</span>${a.steps ? `<span>steps</span><span>${a.steps.map((st, i) => `${i + 1}. <b>${esc(st.id || "step" + (i + 1))}</b> [${st.type}]${st.route ? " ⇢ " + st.route.map(r => esc(r.next)).join("/") : ""}`).join("<br>")}</span>` : `<span>prompt</span><span style="white-space:pre-wrap">${esc(a.prompt)}</span>`}${a.instructions ? `<span>instructions</span><span style="white-space:pre-wrap">${esc(a.instructions)}</span>` : ""}<span>triggers</span><span>${triggersHtml}</span>${a.parent ? `<span>created by</span><span><a href="#" data-open-agent="${esc(a.parent)}">${esc(a.parent)}</a> (spawn step)</span>` : ""}${(state.agentChildren || []).length ? `<span>helper agents</span><span>${state.agentChildren.map(c => `<a href="#" data-open-agent="${esc(c.id)}">${esc(c.name)}</a>${c.enabled ? "" : " (off)"}`).join(", ")}</span>` : ""}${(a.chain || []).length ? `<span>chain</span><span>${a.chain.map(c => `→ ${esc(c.agentId)}`).join(" ")}</span>` : ""}</div>
+    <div class="rowbtns"><button class="b primary small" id="aRun">▶ run now</button><button class="b small" id="aTrial" title="Read and local steps run; steps that reach outside this machine are only reported">trial run</button><button class="b small" id="aShare" title="Download this agent as a .reflex-agent.json someone else can import">share</button><button class="b small" id="aEdit">edit</button><button class="b small" id="aToggle">${a.enabled ? "disable" : "enable"}</button><button class="b small danger" id="aDelete">delete</button></div></div>
     <div class="card"><h3>Workflow</h3><div class="hint">Every component of this agent: triggers → steps (deterministic code, TypeSafe decisions, LLM sessions, agent calls) → end → chained agents. Pink edges are routes decided by TypeSafe answers. Nodes light up while a run executes.</div><div id="agentDiagram"></div><div class="rowbtns"><button class="b small" id="aMermaid">copy as Mermaid</button></div></div>
-    <div class="card"><h3>Runs (${runs.length})</h3><div class="runs">${runs.length ? runs.map(r => `<div class="run${r.id === runId ? " sel" : ""}" data-run="${r.id}"><span class="st ${r.status}">${r.status}</span><span>${new Date(r.startedAt).toLocaleString()} · ${r.trigger?.type || "run"}${r.trigger?.from ? " ← " + esc(r.trigger.from) : ""}${r.output ? " · " + esc(r.output.split("\n")[0].slice(0, 70)) : r.error ? " · " + esc(r.error.slice(0, 70)) : ""}</span><span class="hint">${r.cost ? "$" + r.cost.totalUsd.toFixed(4) + " · " : ""}${r.toolCalls} tools${r.reflexBlocks ? " · " + r.reflexBlocks + " blocked" : ""}${r.endedAt ? " · " + Math.round((r.endedAt - r.startedAt) / 1000) + "s" : ""}${r.resumes ? " · resumed×" + r.resumes : ""}${r.resumable ? ` <button class="b small" data-resume="${r.id}" title="continue from the last completed step">resume</button>` : ""}</span></div>`).join("") : `<div class="fs-empty">no runs yet</div>`}</div></div>
+    <div class="card"><h3>Runs (${runs.length})</h3><div class="runs">${runs.length ? runs.map(r => `<div class="run${r.id === runId ? " sel" : ""}" data-run="${r.id}"><span class="st ${r.status}">${r.status}</span><span>${r.trial ? '<span class="chip" title="trial run: external steps were only reported">trial</span> ' : ""}${new Date(r.startedAt).toLocaleString()} · ${r.trigger?.type || "run"}${r.trigger?.from ? " ← " + esc(r.trigger.from) : ""}${r.output ? " · " + esc(r.output.split("\n")[0].slice(0, 70)) : r.error ? " · " + esc(r.error.slice(0, 70)) : ""}</span><span class="hint">${r.cost ? "$" + r.cost.totalUsd.toFixed(4) + " · " : ""}${r.toolCalls} tools${r.reflexBlocks ? " · " + r.reflexBlocks + " blocked" : ""}${r.endedAt ? " · " + Math.round((r.endedAt - r.startedAt) / 1000) + "s" : ""}${r.resumes ? " · resumed×" + r.resumes : ""}${r.resumable ? ` <button class="b small" data-resume="${r.id}" title="continue from the last completed step">resume</button>` : ""}</span></div>`).join("") : `<div class="fs-empty">no runs yet</div>`}</div></div>
     <div class="card" id="runCard" style="display:none"><h3 id="runTitle">run</h3><div class="rowbtns"><button class="b small" id="runCancel">cancel run</button></div><div id="runChat" style="display:flex;flex-direction:column;gap:6px"></div><div class="rowbtns"><button class="b small" id="runMin">minimize ▾</button></div></div>`;
   $("#aRun").onclick = async () => { const input = await askText(`Run ${a.name}`, "input for {{input}} (optional)", ""); if (input === null) return; const { runId } = await api(`/api/agents/${a.id}/run`, { method: "POST", body: JSON.stringify({ input }), headers: { "Content-Type": "application/json" } }); setTimeout(() => openAgent(a.id, runId), 400); };
+  $("#aTrial").onclick = async () => { const input = await askText(`Trial run ${a.name} (external steps are only reported)`, "input for {{input}} (optional)", ""); if (input === null) return; const { runId } = await api(`/api/agents/${a.id}/run`, { method: "POST", body: JSON.stringify({ input, trial: true }), headers: { "Content-Type": "application/json" } }); setTimeout(() => openAgent(a.id, runId), 400); };
+  $("#aShare").onclick = () => openShareDialog(a);
+  pane.querySelectorAll("[data-open-agent]").forEach(el => el.onclick = e => { e.preventDefault(); openAgent(el.dataset.openAgent); });
   drawDiagram(state.agentDiagram, $("#agentDiagram"), a.steps);
   $("#aMermaid").onclick = () => copyText(state.agentMermaid || "");
   $("#aEdit").onclick = () => { state.editing = true; renderAgent(); };
   $("#aToggle").onclick = async () => { await api(`/api/agents/${a.id}/toggle`, { method: "POST" }); openAgent(a.id); };
-  $("#aDelete").onclick = async () => { const ok = await askText(`Delete agent "${a.name}"?`, "type the agent id to confirm", ""); if (ok !== a.id) return; await api(`/api/agents/${a.id}`, { method: "DELETE" }); state.agent = null; refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; };
+  $("#aDelete").onclick = async () => { const ok = await askText(`Delete agent "${a.name}"?`, "type the agent id to confirm", ""); if (ok !== a.id) return; const kids = (state.agentChildren || []).length && await chooseDialog(`Also delete its ${state.agentChildren.length} helper agent(s)?`, `<p>${state.agentChildren.map(c => esc(c.name)).join(", ")}</p>`, [{ label: "Delete helpers too", value: true, primary: true }, { label: "Keep helpers", value: false }]); await api(`/api/agents/${a.id}${kids ? "?children=1" : ""}`, { method: "DELETE" }); state.agent = null; refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; };
   pane.querySelectorAll("[data-resume]").forEach(b => b.onclick = async (e) => { e.stopPropagation(); b.disabled = true; try { const r = await api(`/api/agents/${a.id}/runs/${b.dataset.resume}/resume`, { method: "POST" }); notice("info", `resuming after: ${(r.from || []).join(", ") || "start"}`); await openAgent(a.id, b.dataset.resume); } catch (err) { notice("error", err.message); b.disabled = false; } });
   pane.querySelectorAll(".run").forEach(el => el.onclick = () => { if (state.openRunId === el.dataset.run) closeRun(); else openRun(a.id, el.dataset.run); });
   const minBtn = $("#runMin"); if (minBtn) minBtn.onclick = closeRun;
@@ -1603,6 +1758,7 @@ function openRun(agentId, runId) {
       return;
     }
     else if (ev.type === "step_start") { setDiagramStatus(ev.id, "running"); v.items.push({ kind: ev.stepType === "decide" ? "typesafe" : "reflex", text: `▶ ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" ${ev.summary || ""}` }); }
+    else if (ev.type === "step_end" && ev.result && ev.result.skipped) { setDiagramStatus(ev.id, "skipped"); v.items.push({ kind: "reflex", text: `⤼ ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" not run in this trial (${ev.result.skipped})${ev.result.wouldRun ? "\nwould run: " + ev.result.wouldRun.slice(0, 600) : ""}` }); }
     else if (ev.type === "step_end") { setDiagramStatus(ev.id, ev.ok ? "ok" : "failed"); if (ev.next === "end") setDiagramStatus("__end", "ok"); v.items.push({ kind: ev.stepType === "decide" ? "typesafe" : "reflex", text: `${ev.ok ? "✓" : "✗"} ${STEP_LABEL[ev.stepType] || ev.stepType} step "${ev.id}" · ${ev.ms}ms${ev.next ? " → " + ev.next : ""}${ev.result && ev.result.answers ? " · " + Object.entries(ev.result.answers).map(([k, a]) => k + " = " + (a.choice !== undefined ? a.choice + " (" + Math.round(a.confidence * 100) + "% conf)" : a.noul !== undefined ? Math.round(a.noul * 100) + "%" : a.score !== undefined ? a.score.toFixed(2) + " (" + Math.round(a.confidence * 100) + "% conf)" : "")).join(" · ") : ""}${ev.result && ev.result.exitCode !== undefined ? " · exit " + ev.result.exitCode : ""}` }); }
     else if (ev.type === "run_closed") { $("#runCancel").style.display = "none"; state.runEs.close(); return; }
     else if (ev.type === "replay_done") { replayed = true; }

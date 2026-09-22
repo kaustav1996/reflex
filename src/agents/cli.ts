@@ -5,6 +5,11 @@ import { describeCron } from "./cron.js";
 import { runAgent } from "./runner.js";
 import { deleteAgent, listAgents, listRuns, loadAgent, saveAgent } from "./store.js";
 
+/** The first message of an import review session. */
+export function importKickoff(stagingId: string, name: string): string {
+	return `I'm importing the shared agent "${name}" (staged as ${stagingId}). Review it with me using the reflex-agent-import skill: explain what it does, set it up for this machine, check what it needs, and trial-run it when I say so. Don't add it until I decide.`;
+}
+
 export async function runAgentCli(args: string[]): Promise<void> {
 	const [sub, ...rest] = args;
 	const flag = (name: string) => {
@@ -30,10 +35,13 @@ export async function runAgentCli(args: string[]): Promise<void> {
 			console.log(`▶ running ${agent.name} …`);
 			// A session hook starts runs with --trigger hook --from <hook@session>, so the run says where it came from.
 			const trigger = flag("--trigger") === "hook" ? ({ type: "hook", from: flag("--from") } as const) : ({ type: "manual" } as const);
+			const trial = rest.includes("--trial");
+			if (trial) console.log("  trial: read and local steps run; external steps are only reported");
 			const run = await runAgent(agent, trigger, input, (_r, ev) => {
-				const e = ev as { type?: string; toolName?: string; args?: Record<string, unknown> };
+				const e = ev as { type?: string; toolName?: string; args?: Record<string, unknown>; id?: string; ok?: boolean; result?: { skipped?: string; wouldRun?: string } };
 				if (e.type === "tool_execution_start") console.log(`  ↳ ${e.toolName} ${JSON.stringify(e.args ?? {}).slice(0, 100)}`);
-			});
+				if (e.type === "step_end") console.log(e.result?.skipped ? `  ⤼ ${e.id}: not run (${e.result.skipped})${e.result.wouldRun ? ` — would run: ${e.result.wouldRun.split("\n")[0].slice(0, 120)}` : ""}` : `  ${e.ok ? "✓" : "✗"} ${e.id}`);
+			}, { trial });
 			console.log(`\n${run.status === "succeeded" ? "✓" : "✗"} ${run.status} · run ${run.id} · ${run.toolCalls} tool calls · ${run.reflexBlocks} reflex blocks · ${((run.endedAt ?? Date.now()) - run.startedAt) / 1000}s`);
 			if (run.output) console.log(`\n${run.output}`);
 			if (run.error) console.log(`\nerror: ${run.error}`);
@@ -73,6 +81,56 @@ export async function runAgentCli(args: string[]): Promise<void> {
 			});
 			console.log(`${r.status}${r.error ? `: ${r.error}` : ""}${r.cost ? ` · $${r.cost.totalUsd.toFixed(4)} · ${r.cost.jevCalls} jev · ${r.cost.llmRuns} llm` : ""}`);
 			if (r.output) console.log(r.output);
+			return;
+		}
+		case "export": {
+			const id = rest[0];
+			const agent = id && loadAgent(id);
+			if (!agent) throw new Error("usage: reflex agent export <id> [--out file] [--author name]   (Jev picks the machine-specific values to turn into parameters)");
+			const { buildBundle, findParamCandidates, judgeCandidates, suggestEffects } = await import("./bundle.js");
+			const candidates = await judgeCandidates(agent, findParamCandidates(agent));
+			const chosen = candidates.filter((c) => (c.score ?? 0) >= 0.5);
+			for (const c of candidates) console.log(`  ${(c.score ?? 0) >= 0.5 ? "✓" : "·"} ${c.suggestedId.padEnd(16)} ${(c.score ?? 0).toFixed(2)}  ${c.value}`);
+			const effects = await suggestEffects(agent.steps ?? []);
+			const { bundle, warnings } = buildBundle(agent, {
+				params: chosen.map((c) => ({ id: c.suggestedId, type: c.type, description: `Replace with your own ${c.type === "dir" ? "folder" : c.type} (the author's was ${c.value})`, value: c.value })),
+				effects: Object.fromEntries(Object.entries(effects).map(([k, v]) => [k, v.effect])),
+				meta: { author: flag("--author") },
+			});
+			const { writeFileSync } = await import("node:fs");
+			const out = flag("--out") ?? `${agent.id}.reflex-agent.json`;
+			writeFileSync(out, `${JSON.stringify(bundle, null, 2)}\n`);
+			console.log(`\nwrote ${out} · ${bundle.params.length} parameters · connectors: ${bundle.requires.connectors.map((c) => c.id).join(", ") || "none"} · secrets: ${bundle.requires.secrets.map((x) => x.name).join(", ") || "none"}`);
+			for (const w of warnings) console.log(`⚠ ${w}`);
+			return;
+		}
+		case "import": {
+			const file = rest[0];
+			if (!file) throw new Error("usage: reflex agent import <file.reflex-agent.json> [--cwd dir] [--yes]   (opens a session that reviews it with you; nothing is added until you add it)");
+			const { existsSync, readFileSync } = await import("node:fs");
+			const { resolve } = await import("node:path");
+			const { homedir } = await import("node:os");
+			const path = resolve(file.replace(/^~(?=$|\/)/, homedir()));
+			if (!existsSync(path)) throw new Error(`no file at ${path}`);
+			let cwd = resolve((flag("--cwd") ?? process.cwd()).replace(/^~(?=$|\/)/, homedir()));
+			if (!flag("--cwd") && !rest.includes("--yes") && process.stdin.isTTY) {
+				const { createInterface } = await import("node:readline/promises");
+				const rl = createInterface({ input: process.stdin, output: process.stdout });
+				const answer = (await rl.question(`Review it in ${cwd}? [Y/n or another folder] `)).trim();
+				rl.close();
+				if (/^n(o)?$/i.test(answer)) return console.log("cancelled; pass --cwd <folder> to choose one");
+				if (answer && !/^y(es)?$/i.test(answer)) cwd = resolve(answer.replace(/^~(?=$|\/)/, homedir()));
+			}
+			if (!existsSync(cwd)) throw new Error(`folder ${cwd} doesn't exist`);
+			const { stageBundle } = await import("./staging.js");
+			const staged = await stageBundle(readFileSync(path, "utf8"), { source: path, cwd });
+			console.log(`staged "${staged.bundle.meta.name}" as ${staged.id} · opening a review session in ${cwd}`);
+			const { spawn } = await import("node:child_process");
+			const { createRequire } = await import("node:module");
+			const { dirname } = await import("node:path");
+			const cli = resolve(dirname(createRequire(import.meta.url).resolve("../../package.json")), "dist", "cli.js");
+			const kickoff = importKickoff(staged.id, staged.bundle.meta.name);
+			await new Promise<void>((done) => spawn(process.execPath, [cli, "--", kickoff], { cwd, stdio: "inherit" }).on("exit", () => done()));
 			return;
 		}
 		case "diagram": {

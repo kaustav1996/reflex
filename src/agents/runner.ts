@@ -8,8 +8,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { type AgentDefinition, type AgentRun, agentSessionsDir, listAgents, loadAgent, newRun, runLogPath, saveRun, emptyCost, findRunByKey, loadCheckpoint, loadRun, saveCheckpoint, type RunCheckpoint } from "./store.js";
-import { runWorkflow } from "./workflow.js";
+import { type AgentDefinition, type AgentRun, agentSessionsDir, deleteAgent, isValidAgentId, listAgents, loadAgent, newRun, runLogPath, saveAgent, saveRun, slugify, emptyCost, findRunByKey, loadCheckpoint, loadRun, saveCheckpoint, type RunCheckpoint } from "./store.js";
+import { fillSpawnTemplate, runWorkflow, type SpawnRequest } from "./workflow.js";
 
 export type RunListener = (run: AgentRun, event: unknown) => void;
 
@@ -51,13 +51,23 @@ export function cancelRun(runId: string): boolean {
  * Queue a run; resolves when it finishes. With an idempotency key, a trigger that already
  * produced a queued, running or succeeded run returns that run instead of starting another.
  */
-export function runAgent(agent: AgentDefinition, trigger: AgentRun["trigger"], input?: string, onEvent?: RunListener, opts: { idempotencyKey?: string } = {}): Promise<AgentRun> {
-	if (opts.idempotencyKey) {
+/**
+ * The gate level for a workflow LLM step in a trial. Only read and local steps run in a trial
+ * (external and untagged ones are skipped), so they run as they will for real, never with the gate
+ * off. Forcing cautious blocked ordinary file writes, and a headless step can't ask anyone.
+ */
+function trialReflex(level: AgentDefinition["reflex"]): AgentDefinition["reflex"] {
+	return !level || level === "off" ? "balanced" : level;
+}
+
+export function runAgent(agent: AgentDefinition, trigger: AgentRun["trigger"], input?: string, onEvent?: RunListener, opts: { idempotencyKey?: string; trial?: boolean } = {}): Promise<AgentRun> {
+	if (opts.idempotencyKey && !opts.trial) {
 		const existing = findRunByKey(agent.id, opts.idempotencyKey);
 		if (existing) return Promise.resolve(existing);
 	}
 	const run = newRun(agent, trigger, input);
-	if (opts.idempotencyKey) run.idempotencyKey = opts.idempotencyKey;
+	if (opts.idempotencyKey && !opts.trial) run.idempotencyKey = opts.idempotencyKey;
+	if (opts.trial) run.trial = true;
 	saveRun(run);
 	return enqueue(agent, run, onEvent);
 }
@@ -115,6 +125,8 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 	live.set(run.id, l);
 	const log = runLogPath(run);
 	const emit = (ev: unknown) => {
+		const se = ev as { type?: string; id?: string; result?: { skipped?: string } };
+		if (run.trial && se.type === "step_end" && se.result?.skipped && se.id) (run.skippedExternal ??= []).push(se.id);
 		try {
 			appendFileSync(log, `${JSON.stringify(ev)}\n`);
 		} catch {}
@@ -140,6 +152,8 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		const result = await runWorkflow(agent.steps, { input: run.input ?? "", agent: agent.name, run: run.id, now: new Date().toISOString(), cwd }, {
 			cwd,
 			emit,
+			trial: run.trial,
+			spawnAgent: (req) => spawnHelper(agent, run, req),
 			signal: controller.signal,
 			limits: agent.limits,
 			cost,
@@ -148,7 +162,7 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 				saveRun(run); // cost so far survives a crash too
 			},
 			runLlm: async (step, prompt, instructions) => {
-				const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd === undefined ? undefined : Math.max(0, agent.limits.maxCostUsd - cost.totalUsd), model: step.model ?? agent.model, reflex: step.reflex ?? agent.reflex, tools: step.tools ?? agent.tools, computer: step.computer ?? agent.computer, timeoutMinutes: step.timeoutMinutes ?? agent.timeoutMinutes }, run, prompt, instructions ?? agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
+				const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd === undefined ? undefined : Math.max(0, agent.limits.maxCostUsd - cost.totalUsd), model: step.model ?? agent.model, reflex: run.trial ? trialReflex(step.reflex ?? agent.reflex) : (step.reflex ?? agent.reflex), tools: step.tools ?? agent.tools, computer: step.computer ?? agent.computer, timeoutMinutes: step.timeoutMinutes ?? agent.timeoutMinutes }, run, prompt, instructions ?? agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
 				run.toolCalls += r.toolCalls;
 				run.reflexBlocks += r.reflexBlocks;
 				return r;
@@ -156,7 +170,8 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 			callAgent: async (agentId, input) => {
 				const next = loadAgent(agentId);
 				if (!next) return { status: "failed", error: `unknown agent ${agentId}` };
-				const r = await runAgent(next, { type: "chain", from: `${agent.id}/${run.id}` }, input);
+				// In a trial the called agent runs as a trial too, so nothing external happens down the line.
+				const r = await runAgent(next, { type: "chain", from: `${agent.id}/${run.id}` }, input, undefined, { trial: run.trial });
 				return { status: r.status, output: r.output, error: r.error };
 			},
 		}, resume);
@@ -167,8 +182,8 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		if (run.status === "running") run.status = result.status;
 		run.error = result.error;
 		saveRun(run);
-		emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt, cost: run.cost } });
-		if (run.status === "succeeded") fireChain(agent, run);
+		emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt, cost: run.cost, trial: run.trial, skippedExternal: run.skippedExternal } });
+		if (run.status === "succeeded" && !run.trial) fireChain(agent, run);
 		return run;
 	}
 
@@ -179,7 +194,10 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		run.status = "timeout";
 		controller.abort();
 	}, (agent.timeoutMinutes ?? 30) * 60 * 1000);
-	const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd }, run, prompt, agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
+	// A single-prompt agent can do anything its tools allow; in a trial it runs with the gate on cautious
+	// (headless asks become blocks) and is told not to reach outside this machine.
+	const trialNote = run.trial ? "This is a TRIAL run: do not change anything outside this machine (no pushes, merge requests, messages, ticket comments or deploys). Describe what you would do instead." : "";
+	const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd, reflex: run.trial ? "cautious" : agent.reflex }, run, prompt, [agent.instructions, trialNote].filter(Boolean).join("\n\n") || undefined, sessionsDir, cwd, emit, l, controller.signal);
 	clearTimeout(timer);
 	live.delete(run.id);
 	run.endedAt = Date.now();
@@ -192,9 +210,44 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 		run.error = r.error;
 	}
 	saveRun(run);
-	emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt, cost: run.cost } });
-	if (run.status === "succeeded") fireChain(agent, run);
+	emit({ type: "run_end", run: { id: run.id, status: run.status, output: run.output, error: run.error, toolCalls: run.toolCalls, reflexBlocks: run.reflexBlocks, durationMs: run.endedAt - run.startedAt, cost: run.cost, trial: run.trial } });
+	if (run.status === "succeeded" && !run.trial) fireChain(agent, run);
 	return run;
+}
+
+/** A spawn step: create a helper from one of the agent's templates, or run / enable / disable / delete one it created. */
+async function spawnHelper(agent: AgentDefinition, run: AgentRun, req: SpawnRequest): Promise<Record<string, unknown>> {
+	if (req.action === "create") {
+		const tpl = req.template ? agent.templates?.[req.template] : undefined;
+		if (!tpl) return { ok: false, error: `no template "${req.template}" in agent ${agent.id}` };
+		const filled = fillSpawnTemplate(tpl, req.with);
+		const id = req.agent || slugify(filled.name);
+		if (!isValidAgentId(id)) return { ok: false, error: `invalid helper agent id "${id}" (lowercase letters, digits and dashes, 2–41 characters)` };
+		const existing = loadAgent(id);
+		if (existing && existing.parent !== agent.id) return { ok: false, error: `agent "${id}" exists and was not created by ${agent.id}` };
+		const child = saveAgent({ ...filled, prompt: filled.prompt ?? "", id, parent: agent.id, enabled: req.enable ?? true, triggers: filled.triggers ?? [{ type: "manual" }] } as never);
+		return { ok: true, id: child.id, created: !existing, enabled: child.enabled };
+	}
+	const id = req.agent ?? "";
+	const child = loadAgent(id);
+	if (!child) return { ok: false, error: `no helper agent "${id}"` };
+	if (child.parent !== agent.id) return { ok: false, error: `agent "${id}" was not created by ${agent.id}; use a call step for other agents` };
+	switch (req.action) {
+		case "run": {
+			const p = runAgent(child, { type: "chain", from: `${agent.id}/${run.id}` }, req.input);
+			if (!req.wait) return { ok: true, id, started: true };
+			const r = await p;
+			return { ok: r.status === "succeeded", id, status: r.status, output: r.output, error: r.error };
+		}
+		case "enable":
+		case "disable":
+			saveAgent({ ...child, enabled: req.action === "enable" });
+			return { ok: true, id, enabled: req.action === "enable" };
+		case "delete":
+			deleteAgent(id);
+			return { ok: true, id, deleted: true };
+	}
+	return { ok: false, error: `unknown spawn action ${req.action}` };
 }
 
 function fireChain(agent: AgentDefinition, run: AgentRun): void {

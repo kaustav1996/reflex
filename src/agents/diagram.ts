@@ -84,6 +84,11 @@ function stepNode(s: NamedStep, agent: AgentDefinition): DiagramNode {
 			return { id: s.id, kind: "llm", label: s.id, detail: clip((s.prompt ?? "").replace(/\s+/g, " "), 70), badges: [`⚡ TypeSafe gate (${agent.reflex ?? "balanced"})`, ...(s.tools?.length ? [`tools: ${s.tools.join(",")}`] : [])] };
 		case "call":
 			return { id: s.id, kind: "call", label: s.id, detail: `→ agent ${s.agentId}` };
+		case "spawn": {
+			const action = s.action ?? "create";
+			const detail = action === "create" ? `creates helper from template ${s.template ?? "?"}${s.agent ? ` as ${s.agent}` : ""}` : `${action} helper ${s.agent ?? ""}`;
+			return { id: s.id, kind: "call", label: s.id, detail: clip(detail, 70), badges: ["helper agent (spawn)"] };
+		}
 		case "end":
 			return { id: s.id, kind: "end", label: s.id, detail: s.output ? clip(String(s.output).replace(/\s+/g, " "), 60) : undefined };
 	}

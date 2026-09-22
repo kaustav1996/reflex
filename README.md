@@ -209,6 +209,22 @@ reflex jev --state "Activity: check the build log for new warnings" \
   --choice "kind: shell|decide|llm" "Cheapest step type that can do this reliably?"
 ```
 
+### Sharing agents
+
+Press **share** on an agent to export it as a `.reflex-agent.json` file. Folders, repo URLs and
+ids become parameters that the importer fills in. Secrets and webhook secrets are never included.
+To import, use **import agent** in the Agents tab, or drop the file into a session. Reflex then
+opens a review session in a folder you pick. The model checks the connectors, CLIs and secrets,
+proposes values, and runs a trial run. In a trial, steps tagged `external` (and untagged ones)
+are reported, not run. The agent is added only when you press **Add**, and it starts disabled
+with the gate on.
+
+```bash
+reflex agent export oncall --out oncall.reflex-agent.json
+reflex agent import oncall.reflex-agent.json --cwd ~/work/ops
+reflex agent run oncall --trial
+```
+
 ## Artifacts: deploy with your own accounts
 
 `reflex artifact deploy <folder>`, the Artifacts tab, or the `deploy_artifact` tool publishes an

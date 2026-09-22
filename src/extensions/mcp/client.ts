@@ -33,6 +33,17 @@ export interface McpContent {
 	mimeType?: string;
 }
 
+/** The prefix a server's tools get in a session: `<prefix>__<tool>` (a server "cloudflare-docs" gives "cloudflare_docs"). */
+export function toolPrefix(server: string): string {
+	return server.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+/** The configured server whose tools carry this prefix (or name), if any. */
+export function serverForPrefix(servers: Record<string, McpServerConfig>, prefix: string): string | undefined {
+	if (servers[prefix]) return prefix;
+	return Object.keys(servers).find((name) => toolPrefix(name) === toolPrefix(prefix));
+}
+
 export function mcpConfigPath(): string {
 	return join(getReflexHome(), "mcp.json");
 }
