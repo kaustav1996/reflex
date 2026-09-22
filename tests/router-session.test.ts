@@ -13,18 +13,21 @@ const { effectiveRouting, registerRouter, routeStatus } = await import("../src/e
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
 
 /** A Reflex state with three saved tiers, a fake Jev that always answers `tier`, and a fake Pi. */
-function setup(tier: "fast" | "default" | "strong" = "fast") {
+function setup(tier: "fast" | "default" | "strong" = "fast", confidence = 0.9) {
 	const config = loadReflexConfig();
 	config.reflex.enabled = true;
 	config.reflex.routeModels = true;
 	config.reflex.routing = { fast: "or/fast-saved", default: "or/default-saved", strong: "or/strong-saved" };
 	const state = new ReflexState(config);
 	let jevCalls = 0;
+	const seenStates: unknown[] = [];
 	state.client = {
-		systemOne: async () => {
+		systemOne: async function () {
 			jevCalls++;
-			const probabilities = { fast: 0.05, default: 0.05, strong: 0.05, [tier]: 0.9 };
-			return { answers: { tier: { type: "choice", choice: tier, confidence: 0.9, probabilities } }, usage: { input_tokens: 10 }, latencyMs: 1 };
+			const rest = (1 - confidence) / 2;
+			const probabilities = { fast: rest, default: rest, strong: rest, [tier]: confidence };
+			seenStates.push(arguments[0]?.state);
+			return { answers: { tier: { type: "choice", choice: tier, confidence, probabilities } }, usage: { input_tokens: 10 }, latencyMs: 1 };
 		},
 	} as never;
 	const handlers: Record<string, Handler> = {};
@@ -55,7 +58,7 @@ function setup(tier: "fast" | "default" | "strong" = "fast") {
 	registerRouter(pi as never, state);
 	const prompt = (text = "rename this variable across the file") => handlers.before_agent_start({ type: "before_agent_start", prompt: text, systemPrompt: "" }, ctx);
 	const userPicks = (provider: string, id: string) => handlers.model_select({ type: "model_select", model: { provider, id }, previousModel: current, source: "set" }, ctx);
-	return { state, prompt, userPicks, switched, jev: () => jevCalls };
+	return { state, prompt, userPicks, switched, jev: () => jevCalls, seenStates };
 }
 
 test("the router's own switch is not taken for the user's pick", async () => {
@@ -90,4 +93,11 @@ test("session tier overrides win over the saved tiers, and only for this session
 	assert.deepEqual(s.switched, ["or/fast-session"]);
 	assert.equal(s.state.config.reflex.routing.fast, "or/fast-saved", "the saved config is untouched");
 	assert.equal(routeStatus(s.state), "⇄ routing · session tiers");
+});
+
+test("an unsure answer routes to the default tier instead of leaving the last model in place", async () => {
+	const s = setup("fast", 0.4);
+	await s.prompt("good point, go ahead");
+	assert.deepEqual(s.switched, ["or/default-saved"]);
+	assert.ok((s.seenStates[0] as { recent_context?: string }).recent_context, "the router is told what the request continues");
 });

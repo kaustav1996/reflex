@@ -6,7 +6,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { snapshotSession } from "./context.js";
-import { buildCompletionQuestions, buildTurnMonitorQuestions } from "./policy.js";
+import { buildCompletionQuestions, buildTurnMonitorQuestions, shouldNudgeContinue } from "./policy.js";
+
+/** Continue-nudges allowed per message the user sends (so a model that keeps planning can't loop). */
+export const MAX_CONTINUE_NUDGES = 2;
 import type { ReflexState } from "./state.js";
 
 const NUDGE_TYPE = "reflex-nudge";
@@ -16,6 +19,12 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 	let consecutiveLoopSignals = 0;
 	let lastNudgeTurn = -10;
 	let nudgedVerifyForPrompt = false;
+	let continueNudges = 0;
+	// Only a message the user typed resets the continue budget; Reflex's own follow-ups don't.
+	pi.on("input", async () => {
+		continueNudges = 0;
+		return undefined;
+	});
 	let pendingCheck: Promise<void> | undefined;
 
 	pi.on("agent_start", () => {
@@ -83,9 +92,10 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 		if (!policy.enabled || !policy.monitorProgress || !state.client) return;
 		if (nudgedVerifyForPrompt) return;
 		const snap = snapshotSession(ctx, { maxToolCalls: 10 });
-		if (!snap.assistantText || snap.recentToolCalls.length === 0) return;
+		if (!snap.assistantText) return;
 		const changed = snap.recentToolCalls.some((c) => c.tool === "edit" || c.tool === "write" || c.tool === "bash");
-		if (!changed) return;
+		// Worth a check when work happened, or when a longer reply may have announced work and stopped.
+		if (!changed && snap.assistantText.length < 200) return;
 		try {
 			const res = await state.client.systemOne({
 				purpose: "monitor",
@@ -94,9 +104,15 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 				timeoutMs: policy.timeoutMs,
 			});
 			state.monitor.checks++;
-			const { claims_done, verified, scope_drift, needs_user } = res.answers;
-			state.record("completion", `done ${pct(claims_done.noul)} · verified ${pct(verified.noul)} · drift ${pct(scope_drift.noul)} · needs-user ${pct(needs_user.noul)}`);
+			const { claims_done, verified, scope_drift, needs_user, stopped_midway } = res.answers;
+			state.record("completion", `done ${pct(claims_done.noul)} · verified ${pct(verified.noul)} · drift ${pct(scope_drift.noul)} · needs-user ${pct(needs_user.noul)} · stopped-midway ${pct(stopped_midway.noul)}`);
 			if (needs_user.noul >= 0.7) return;
+			if (shouldNudgeContinue({ claims_done: claims_done.noul, needs_user: needs_user.noul, stopped_midway: stopped_midway.noul }) && continueNudges < MAX_CONTINUE_NUDGES) {
+				continueNudges++;
+				state.monitor.continueNudges++;
+				nudge(pi, ctx, `Reflex (System One check): you described the next steps but ended the turn without doing them (${pct(stopped_midway.noul)}). Carry them out now with tools; don't repeat the plan. If something blocks you, say what it is.`, "followUp");
+				return;
+			}
 			if (claims_done.noul >= 0.7 && verified.noul <= 0.35) {
 				nudgedVerifyForPrompt = true;
 				state.monitor.verifyNudges++;

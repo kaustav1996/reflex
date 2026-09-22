@@ -10,7 +10,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import { isValidChoice } from "./client.js";
-import { clip } from "./context.js";
+import { clip, snapshotSession } from "./context.js";
 import { buildRoutingQuestion, ROUTE_TIERS } from "./policy.js";
 import type { ReflexState, RouteTier } from "./state.js";
 
@@ -58,10 +58,15 @@ export function registerRouter(pi: ExtensionAPI, state: ReflexState): void {
 		const prompt = event.prompt?.trim();
 		if (!prompt || prompt.startsWith("/") || prompt.length < 8) return undefined;
 
+		// What the request continues: a short "go ahead" belongs to the task before it.
+		let recent = "";
+		try {
+			recent = clip(snapshotSession(ctx, { maxToolCalls: 0 }).assistantText ?? "", 800);
+		} catch {}
 		try {
 			const res = await state.client.systemOne({
 				purpose: "route",
-				state: { request: clip(prompt, 2000), project_hint: { dir: basename(ctx.cwd) } },
+				state: { request: clip(prompt, 2000), recent_context: recent || "(start of the session)", project_hint: { dir: basename(ctx.cwd) } },
 				questions: { tier: buildRoutingQuestion() },
 				timeoutMs: policy.timeoutMs,
 			});
@@ -69,15 +74,18 @@ export function registerRouter(pi: ExtensionAPI, state: ReflexState): void {
 			if (!isValidChoice(answer, Object.keys(ROUTE_TIERS))) return undefined;
 			state.router.decisions++;
 			state.router.byTier[answer.choice] = (state.router.byTier[answer.choice] ?? 0) + 1;
-			const target = tiers[answer.choice as keyof typeof tiers] ?? tiers.default;
-			state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}% → ${target ?? "(unchanged)"}`);
-			if (!target || answer.confidence < 0.6) return undefined;
-			await switchModel(pi, ctx, state, target, answer.choice, answer.confidence);
-			const effort = efforts[answer.choice as RouteTier] ?? (tiers[answer.choice as RouteTier] ? undefined : efforts.default);
+			// Unsure means the default tier, never the tier the previous request happened to get.
+			const unsure = answer.confidence < 0.6;
+			const tier: RouteTier = unsure ? "default" : (answer.choice as RouteTier);
+			const target = tiers[tier] ?? tiers.default;
+			state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}%${unsure ? " (unsure → default)" : ""} → ${target ?? "(unchanged)"}`);
+			if (!target) return undefined;
+			await switchModel(pi, ctx, state, target, tier, answer.confidence);
+			const effort = efforts[tier] ?? (tiers[tier] ? undefined : efforts.default);
 			if (effort && effort !== ctx.thinkingLevel) {
 				try {
 					pi.setThinkingLevel(effort as never);
-					state.record("route", `effort → ${effort} (${answer.choice} tier)`);
+					state.record("route", `effort → ${effort} (${tier} tier)`);
 				} catch {}
 			}
 		} catch (err) {

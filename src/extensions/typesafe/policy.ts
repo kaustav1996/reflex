@@ -213,7 +213,7 @@ export function buildTurnMonitorQuestions(): { looping: NoulQuestion; error_igno
 	};
 }
 
-export function buildCompletionQuestions(): { claims_done: NoulQuestion; verified: NoulQuestion; scope_drift: NoulQuestion; needs_user: NoulQuestion } {
+export function buildCompletionQuestions(): { claims_done: NoulQuestion; verified: NoulQuestion; scope_drift: NoulQuestion; needs_user: NoulQuestion; stopped_midway: NoulQuestion } {
 	return {
 		claims_done: noul({
 			question: "Does assistant_text claim that the task is complete, fixed, working, or done?",
@@ -237,7 +237,22 @@ export function buildCompletionQuestions(): { claims_done: NoulQuestion; verifie
 			question: "Is the assistant asking the user a question or waiting for a decision only the user can make?",
 			inspect: "assistant_text",
 		}),
+		stopped_midway: noul(
+			{
+				question: "Does assistant_text lay out work the assistant is about to do (a plan, a list of changes, 'I need to…', 'next I will…', 'let me…') and then end without having done that work?",
+				inspect: ["assistant_text", "recent_tool_calls"],
+			},
+			{
+				true: { what: "It announces next steps or a plan and the turn ends there", examples: ["'I need to: 1. add a step 2. update the monitor' and nothing else happens", "'Let me fix the fetch step and re-run' as the last words"] },
+				false: { what: "It reports finished work, asks the user something, or explains why it stopped", examples: ["'Done: the tests pass'", "'Which option do you want?'", "'I can't continue without the API key'"] },
+			},
+		),
 	};
+}
+
+/** At the end of a turn: continue when the reply only announced its next steps. */
+export function shouldNudgeContinue(a: { claims_done: number; needs_user: number; stopped_midway: number }): boolean {
+	return a.stopped_midway >= 0.7 && a.claims_done < 0.5 && a.needs_user < 0.5;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +268,8 @@ export const ROUTE_TIERS = {
 export function buildRoutingQuestion(): ChoiceQuestion {
 	return choice(
 		{
-			question: "Which tier of language model does this user request need to be done well?",
-			inspect: ["request", "project_hint"],
+			question: "Which tier of language model does the work this request asks for need to be done well? A short reply such as 'yes', 'good point', 'go ahead' or 'fix it' continues the task in recent_context: judge that task, not the length of the reply.",
+			inspect: ["request", "recent_context", "project_hint"],
 			fallback: "Prefer default when unsure",
 		},
 		ROUTE_TIERS,

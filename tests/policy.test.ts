@@ -111,3 +111,12 @@ test("bash path hints and read-only detection", () => {
 	assert.equal(v.decision, "allow");
 	assert.equal(v.rule, "read-only-command");
 });
+
+test("a turn that only announced its next steps is sent back to do them", async () => {
+	const { buildCompletionQuestions, shouldNudgeContinue } = await import("../src/extensions/typesafe/policy.ts");
+	assert.ok("stopped_midway" in buildCompletionQuestions());
+	assert.equal(shouldNudgeContinue({ stopped_midway: 0.9, claims_done: 0.04, needs_user: 0.1 }), true, "the observed case: planned, didn't act, didn't ask");
+	assert.equal(shouldNudgeContinue({ stopped_midway: 0.9, claims_done: 0.04, needs_user: 0.8 }), false, "waiting on the user is fine");
+	assert.equal(shouldNudgeContinue({ stopped_midway: 0.9, claims_done: 0.9, needs_user: 0.1 }), false, "a done claim goes to the verification check instead");
+	assert.equal(shouldNudgeContinue({ stopped_midway: 0.3, claims_done: 0.04, needs_user: 0.1 }), false);
+});
