@@ -29,3 +29,19 @@ test("workflow agent: implicit order, route rules with conditions, back edge for
 	assert.ok(mm.includes(':::decide') && mm.includes(':::llm') && mm.includes(':::shell'));
 	assert.ok(mm.includes('|"otherwise"|'));
 });
+
+test("route edges carry a short label for the drawing and keep the full condition", async () => {
+	const { agentDiagram, shortCondition } = await import("../src/agents/diagram.ts");
+	assert.equal(shortCondition('gate.ready.choice == "awaiting_info"'), "awaiting_info");
+	assert.equal(shortCondition("gate.ready.choice != 'ready'"), "not ready");
+	assert.equal(shortCondition("push_gate.safe_to_push.noul >= 0.5"), "safe_to_push ≥ 0.5");
+	assert.equal(shortCondition("tests.ok == false"), "tests.ok = false");
+	assert.equal(shortCondition("default"), "otherwise");
+	const d = agentDiagram({ id: "a", name: "a", prompt: "", cwd: "/", triggers: [{ type: "manual" }], steps: [
+		{ id: "gate", type: "decide", questions: { ready: { type: "choice", instructions: "?", criteria: { ready: "", awaiting_info: "" } } }, route: [{ when: 'gate.ready.choice == "awaiting_info"', next: "wait" }, { when: "default", next: "end" }] },
+		{ id: "wait", type: "shell", run: "echo" },
+	] } as never);
+	const e = d.edges.find((x) => x.to === "wait")!;
+	assert.equal(e.short, "awaiting_info");
+	assert.equal(e.label, 'gate.ready.choice == "awaiting_info"');
+});

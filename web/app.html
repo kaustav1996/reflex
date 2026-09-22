@@ -668,6 +668,17 @@
   .wf-node.ok rect { stroke: #03aa5c; stroke-width: 4; } .wf-node.failed rect { stroke: #c0392b; stroke-width: 4; } .wf-node.skipped { opacity: .45; }
   .wf-edge path { fill: none; stroke: var(--ink); stroke-width: 1.5; } .wf-edge.route path { stroke: #f386a1; stroke-width: 2; } .wf-edge.chain path { stroke: #09aea1; stroke-dasharray: 4 3; }
   .wf-edge text { font-size: 10px; fill: var(--ink); } .wf-edge rect { fill: var(--paper); stroke: var(--line); }
+  .wf-edge.dim path { opacity: .18; }
+  .wf-label.route rect { stroke: #f386a1; }
+  .wf-node { cursor: pointer; } .wf-node:hover rect { stroke-width: 3; } .wf-node:focus { outline: none; } .wf-node:focus rect, .wf-node.sel rect { stroke: #f386a1; stroke-width: 4; }
+  .wf-detail { position: fixed; top: 16px; right: 16px; bottom: 16px; width: min(460px, calc(100vw - 32px)); overflow: auto; z-index: 40; background: var(--paper); color: var(--ink); border: 2px solid var(--line); padding: 12px; box-shadow: 4px 4px 0 var(--pink); }
+  .wf-detail-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .wf-meta { grid-template-columns: 110px 1fr; }
+  .wf-meta .out { margin: 0; white-space: pre-wrap; overflow-x: auto; }
+  .wf-text { white-space: pre-wrap; }
+  .wf-detail a { color: var(--pink); font-weight: 700; } .wf-detail a:hover { text-decoration: underline; }
+  .wf-q { margin-bottom: 8px; } .wf-q ol, .wf-q ul { margin: 4px 0 0 18px; padding: 0; }
+  .wf-routes { margin: 0; padding-left: 16px; } .wf-routes code { font-size: 11px; }
   .run { display: grid; grid-template-columns: 78px 1fr auto; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--light); cursor: pointer; font-size: 12px; }
   .run:hover { background: var(--reflex-bg); } .run.sel { background: var(--pink); color: #1e1e1e; }
   .st { font-weight: 700; } .st.succeeded { color: var(--green); } .st.failed, .st.timeout { color: #c0392b; } .st.running, .st.queued { color: var(--magenta); } .run.sel .st { color: #1e1e1e; }
@@ -1424,7 +1435,7 @@ function wireAgentForm(editing) {
   $("#addHook").onclick = e => { e.preventDefault(); $("#aTrig").insertAdjacentHTML("beforeend", trigRow({ type: "webhook", secret: "" }, Date.now())); rewire(); };
   $("#addChain").onclick = e => { e.preventDefault(); $("#aChain").insertAdjacentHTML("beforeend", chainRow({ agentId: others[0]?.id, input: "{{output}}" }, Date.now(), others)); rewire(); };
   rewire();
-  const preview = async () => { try { const body = readAgentForm(); const r = await api("/api/agents/diagram", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }); let m = $("#aPreview"); if (!m) { m = document.createElement("div"); m.id = "aPreview"; m.className = "card"; m.innerHTML = "<h3>Workflow preview</h3><div id='aPreviewBody'></div>"; $("#aForm").closest(".card").after(m); } drawDiagram(r.diagram, $("#aPreviewBody")); } catch (e) { notice("error", "preview: " + e.message); } };
+  const preview = async () => { try { const body = readAgentForm(); const r = await api("/api/agents/diagram", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }); let m = $("#aPreview"); if (!m) { m = document.createElement("div"); m.id = "aPreview"; m.className = "card"; m.innerHTML = "<h3>Workflow preview</h3><div id='aPreviewBody'></div>"; $("#aForm").closest(".card").after(m); } drawDiagram(r.diagram, $("#aPreviewBody"), body.steps); } catch (e) { notice("error", "preview: " + e.message); } };
   $("#aPreviewBtn").onclick = e => { e.preventDefault(); preview(); };
   $("#aSave").onclick = async () => { try { const { agent } = await api("/api/agents", { method: "POST", body: JSON.stringify(readAgentForm()), headers: { "Content-Type": "application/json" } }); state.editing = false; await openAgent(agent.id); } catch (e) { await askText("Could not save", "", e.message); } };
   if (editing) $("#aCancel").onclick = () => { state.editing = false; renderAgent(); };
@@ -1432,42 +1443,110 @@ function wireAgentForm(editing) {
 // ── workflow diagram: nodes per component kind, edges per transition, live status per run ──
 const WF_KIND = { trigger: "trigger", shell: "deterministic code", decide: "TypeSafe decision", llm: "LLM", call: "agent call", end: "end", chain: "chained agent" };
 const WF_FILL = { trigger: "var(--paper)", shell: "#03aa5c", decide: "#f386a1", llm: "#d45bb6", call: "#09aea1", end: "#1e1e1e", chain: "var(--paper)" };
-function drawDiagram(d, mount) {
+/**
+ * Workflow diagram. Nodes are laid out in layers (longest path), ordered inside each layer by
+ * where their predecessors sit so edges cross less. The face of a node shows its name, kind and
+ * one line; click it for everything (the command, prompt, questions, routes with their full
+ * conditions). Edge labels are short (`awaiting_info`, `safe_to_push ≥ 0.5`) and pushed apart
+ * when they would overlap; hover one for the full condition.
+ */
+function drawDiagram(d, mount, steps) {
   if (!d || !mount) return;
-  const W = 210, H = 58, HB = 74, VG = 46, HG = 22, PAD = 16;
+  const W = 236, H = 70, VG = 96, HG = 64, PAD = 20;
   const order = new Map(d.nodes.map((n, i) => [n.id, i]));
-  const preds = {}; d.edges.forEach(e => { if ((order.get(e.from) ?? 0) < (order.get(e.to) ?? 0) || d.nodes.find(n => n.id === e.from)?.kind === "trigger") (preds[e.to] ||= []).push(e.from); });
+  const byId = new Map(d.nodes.map(n => [n.id, n]));
+  const preds = {}; d.edges.forEach(e => { if ((order.get(e.from) ?? 0) < (order.get(e.to) ?? 0) || byId.get(e.from)?.kind === "trigger") (preds[e.to] ||= []).push(e.from); });
   const layer = {}; d.nodes.forEach(n => { layer[n.id] = n.kind === "trigger" ? 0 : Math.max(1, ...(preds[n.id] || []).filter(p => layer[p] !== undefined).map(p => layer[p] + 1)); });
   const layers = []; d.nodes.forEach(n => (layers[layer[n.id]] ||= []).push(n));
-  const height = n => (n.badges && n.badges.length ? HB : H);
-  const rowH = layers.map(l => Math.max(...l.map(height)));
-  const width = Math.max(520, ...layers.map(l => l.length * W + (l.length - 1) * HG)) + PAD * 2;
-  const pos = {}; let y = PAD;
-  layers.forEach((l, li) => { const total = l.length * W + (l.length - 1) * HG; let x = (width - total) / 2; l.forEach(n => { pos[n.id] = { x, y, w: W, h: height(n) }; x += W + HG; }); y += rowH[li] + VG; });
+  for (let i = 0; i < layers.length; i++) layers[i] ||= [];
+  const width = Math.max(560, ...layers.map(l => l.length * W + Math.max(0, l.length - 1) * HG)) + PAD * 2;
+  const pos = {};
+  let y = PAD;
+  layers.forEach(l => {
+    // Order by the mean x of predecessors already placed (fewer crossings), then by definition order.
+    const bary = n => { const xs = (preds[n.id] || []).map(p => pos[p]).filter(Boolean).map(p => p.x + p.w / 2); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : Infinity; };
+    l.sort((a, b) => (bary(a) - bary(b)) || (order.get(a.id) - order.get(b.id)));
+    const total = l.length * W + Math.max(0, l.length - 1) * HG;
+    let x = (width - total) / 2;
+    l.forEach(n => { pos[n.id] = { x, y, w: W, h: H }; x += W + HG; });
+    y += H + VG;
+  });
   const totalH = y - VG + PAD;
-  const esc2 = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const esc2 = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1) + "…" : String(t));
+  const bez = (p0, p1, p2, p3, t) => { const u = 1 - t; return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3; };
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${totalH}" viewBox="0 0 ${width} ${totalH}"><defs><marker id="wfArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker></defs>`;
-  const edgeLabels = [];
-  const outIdx = {}; // stagger labels of several edges leaving the same node so they don't overlap
+  const placed = [];
+  const overlaps = r => placed.some(q => r.x < q.x + q.w + 4 && q.x < r.x + r.w + 4 && r.y < q.y + q.h + 3 && q.y < r.y + r.h + 3);
+  const labels = [];
   d.edges.forEach(e => { const a = pos[e.from], b = pos[e.to]; if (!a || !b) return;
     const back = layer[e.to] <= layer[e.from];
-    const k = (outIdx[e.from] = (outIdx[e.from] || 0) + 1) - 1;
-    let path, lx, ly;
-    if (!back) { const x1 = a.x + a.w / 2, y1 = a.y + a.h, x2 = b.x + b.w / 2, y2 = b.y; const c = (y2 - y1) / 2; path = `M${x1} ${y1} C${x1} ${y1 + c} ${x2} ${y2 - c} ${x2} ${y2}`; const t = 0.28 + k * 0.16; lx = x1 + (x2 - x1) * t; ly = y1 + (y2 - y1) * t; }
-    else { const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x + b.w, y2 = b.y + b.h / 2; const bend = Math.max(x1, x2) + 46; path = `M${x1} ${y1} C${bend} ${y1} ${bend} ${y2} ${x2} ${y2}`; lx = bend + 4; ly = (y1 + y2) / 2; }
-    svg += `<g class="wf-edge ${e.kind}"><path d="${path}" marker-end="url(#wfArrow)"/></g>`;
-    if (e.label) edgeLabels.push({ lx, ly, text: clip(e.label, 34), back });
+    let path, at;
+    if (!back) {
+      const x1 = a.x + a.w / 2, y1 = a.y + a.h, x2 = b.x + b.w / 2, y2 = b.y, c = (y2 - y1) / 2;
+      path = `M${x1} ${y1} C${x1} ${y1 + c} ${x2} ${y2 - c} ${x2} ${y2}`;
+      at = t => ({ x: bez(x1, x1, x2, x2, t), y: bez(y1, y1 + c, y2 - c, y2, t) });
+    } else {
+      const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x + b.w, y2 = b.y + b.h / 2, bend = Math.max(x1, x2) + 50;
+      path = `M${x1} ${y1} C${bend} ${y1} ${bend} ${y2} ${x2} ${y2}`;
+      at = t => ({ x: bez(x1, bend, bend, x2, t), y: bez(y1, y1, y2, y2, t) });
+    }
+    svg += `<g class="wf-edge ${e.kind}" data-from="${esc2(e.from)}" data-to="${esc2(e.to)}"><path d="${path}" marker-end="url(#wfArrow)"/></g>`;
+    const text = e.short || e.label;
+    if (!text) return;
+    const w = Math.min(text.length, 26) * 6.2 + 12, h = 16;
+    // Near the target first (targets are spread out); step back along the curve until it fits.
+    let r;
+    for (const t of [0.62, 0.5, 0.74, 0.38, 0.84, 0.28]) { const p = at(t); r = { x: p.x - w / 2, y: p.y - h / 2, w, h }; if (!overlaps(r)) break; }
+    while (overlaps(r)) r.y += h + 3;
+    placed.push(r);
+    labels.push({ r, text: clip(text, 26), full: e.label || text, kind: e.kind });
   });
-  edgeLabels.forEach(l => { const w = l.text.length * 6.2 + 10; const x = l.back ? l.lx : l.lx - w / 2; svg += `<g class="wf-edge"><rect x="${x}" y="${l.ly - 9}" width="${w}" height="16" rx="2"/><text x="${x + 5}" y="${l.ly + 3}">${esc2(l.text)}</text></g>`; });
-  d.nodes.forEach(n => { const p = pos[n.id]; const badges = (n.badges || []).map(b => clip(b, 40)).join("  ·  ");
-    svg += `<g class="wf-node ${n.kind}" data-node="${esc2(n.id)}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="3"><title>${esc2(WF_KIND[n.kind])}: ${esc2(n.label)}${n.detail ? "\n" + esc2(n.detail) : ""}${badges ? "\n" + esc2(badges) : ""}</title></rect>
-      <text x="${p.x + 10}" y="${p.y + 20}" font-size="12" font-weight="700">${esc2(clip(n.label, 26))}</text>
-      <text x="${p.x + p.w - 8}" y="${p.y + 20}" font-size="9" text-anchor="end" opacity=".8">${esc2(WF_KIND[n.kind].toUpperCase())}</text>
-      ${n.detail ? `<text x="${p.x + 10}" y="${p.y + 38}" font-size="10" opacity=".9">${esc2(clip(n.detail, 34))}</text>` : ""}
-      ${badges ? `<text x="${p.x + 10}" y="${p.y + 56}" font-size="9" opacity=".9">${esc2(clip(badges, 38))}</text>` : ""}</g>`; });
+  labels.forEach(l => { svg += `<g class="wf-edge wf-label ${l.kind}"><title>${esc2(l.full)}</title><rect x="${l.r.x}" y="${l.r.y}" width="${l.r.w}" height="${l.r.h}" rx="2"/><text x="${l.r.x + 6}" y="${l.r.y + 12}">${esc2(l.text)}</text></g>`; });
+  d.nodes.forEach(n => { const p = pos[n.id]; if (!p) return;
+    const extra = (n.badges || []).length ? ` · ${n.badges.length} more` : "";
+    svg += `<g class="wf-node ${n.kind}" data-node="${esc2(n.id)}" tabindex="0" role="button" aria-label="${esc2(n.label)}"><title>${esc2(WF_KIND[n.kind])}: ${esc2(n.label)} (click for details)</title><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="3"/>
+      <text x="${p.x + 10}" y="${p.y + 20}" font-size="12.5" font-weight="700">${esc2(clip(n.label, 30))}</text>
+      <text x="${p.x + 10}" y="${p.y + 36}" font-size="9" letter-spacing=".06em" opacity=".8">${esc2(WF_KIND[n.kind].toUpperCase())}${esc2(extra)}</text>
+      ${n.detail ? `<text x="${p.x + 10}" y="${p.y + 55}" font-size="10.5" opacity=".92">${esc2(clip(n.detail, 34))}</text>` : ""}</g>`; });
   svg += "</svg>";
-  mount.innerHTML = `<div class="wf-legend">${d.kinds.map(k => `<span><i style="background:${WF_FILL[k]}${k === "chain" ? ";border-style:dashed" : ""}"></i>${WF_KIND[k]}</span>`).join("")}<span><i style="background:var(--paper);border:2px solid #f386a1"></i>route on a TypeSafe answer</span></div><div class="wf">${svg}</div>`;
+  mount.innerHTML = `<div class="wf-legend">${d.kinds.map(k => `<span><i style="background:${WF_FILL[k]}${k === "chain" ? ";border-style:dashed" : ""}"></i>${WF_KIND[k]}</span>`).join("")}<span><i style="background:var(--paper);border:2px solid #f386a1"></i>route on a TypeSafe answer</span><span class="hint">click a step for its details (Esc closes)</span></div><div class="wf">${svg}</div><div class="wf-detail" hidden></div>`;
+  const panel = mount.querySelector(".wf-detail");
+  const select = id => {
+    mount.querySelectorAll(".wf-node").forEach(el => el.classList.toggle("sel", el.dataset.node === id));
+    mount.querySelectorAll(".wf-edge").forEach(el => el.classList.toggle("dim", !!id && el.dataset.from !== id && el.dataset.to !== id && !el.classList.contains("wf-label")));
+    if (!id) { panel.hidden = true; return; }
+    panel.hidden = false; panel.innerHTML = diagramDetail(byId.get(id), d, steps || []);
+    panel.querySelector(".wf-close").onclick = () => select(null);
+    panel.querySelectorAll("[data-goto]").forEach(a => a.onclick = ev => { ev.preventDefault(); select(a.dataset.goto); });
+  };
+  document.addEventListener("keydown", function esc(ev) { if (!document.body.contains(panel)) return document.removeEventListener("keydown", esc); if (ev.key === "Escape" && !panel.hidden) select(null); });
+  mount.querySelectorAll(".wf-node").forEach(el => { el.onclick = () => select(el.classList.contains("sel") ? null : el.dataset.node); el.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); el.onclick(); } }; });
+}
+/** Everything about one diagram node: the step as written, and where it goes next. */
+function diagramDetail(n, d, steps) {
+  if (!n) return "";
+  const step = steps.find((s, i) => (s.id || `step${i + 1}`) === n.id);
+  const e = t => esc(String(t ?? ""));
+  const row = (k, v) => v === undefined || v === null || v === "" ? "" : `<div class="k">${k}</div><div class="v">${v}</div>`;
+  const pre = t => `<pre class="out">${e(typeof t === "string" ? t : JSON.stringify(t, null, 2))}</pre>`;
+  const label = id => e(d.nodes.find(x => x.id === id)?.label || id);
+  let body = "";
+  if (step?.type === "shell") body = row("runs", pre(step.run)) + row("folder", step.cwd && e(step.cwd)) + row("timeout", step.timeoutSec && `${step.timeoutSec}s`) + row("on failure", step.allowFailure ? "continues (route on its exit code)" : "stops the run") + row("JSON from", step.jsonFile ? e(step.jsonFile) : "stdout");
+  else if (step?.type === "decide") {
+    const q = Object.entries(step.questions || {}).map(([k, q]) => `<div class="wf-q"><b>${e(k)}</b> <span class="chip">${e(q.type)}</span><div>${e(typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions))}</div>${q.optionsFrom ? `<div class="hint">options rebuilt each run from <code>${e(q.optionsFrom)}</code></div>` : ""}${q.criteria ? (Array.isArray(q.criteria) ? `<ol start="0">${q.criteria.map(c => `<li>${e(c)}</li>`).join("")}</ol>` : `<ul>${Object.entries(q.criteria).map(([ck, cv]) => `<li><b>${e(ck)}</b>${cv ? ": " + e(cv) : ""}</li>`).join("")}</ul>`) : ""}</div>`).join("");
+    const fe = step.forEach ? `<div class="wf-q"><b>for each item of</b> <code>${e(step.forEach.from)}</code>${step.forEach.top ? ` · keeps the top ${e(step.forEach.top)}` : ""}${step.forEach.min !== undefined ? ` · at least ${e(step.forEach.min)}` : ""}<div>${e(typeof step.forEach.question?.instructions === "string" ? step.forEach.question.instructions : JSON.stringify(step.forEach.question?.instructions ?? ""))}</div></div>` : "";
+    body = row("asks Jev", q + fe) + row("state", step.state && pre(step.state));
+  } else if (step?.type === "llm") body = row("prompt", `<div class="wf-text">${e(step.prompt)}</div>`) + row("tools", (step.tools || []).length ? step.tools.map(t => `<span class="chip">${e(t)}</span>`).join("") : "all") + row("model", step.model && e(step.model));
+  else if (step?.type === "call") body = row("runs agent", e(step.agentId)) + row("input", step.input && pre(step.input));
+  else if (step?.type === "end") body = row("output", step.output && pre(step.output));
+  else body = row("details", e(n.detail || ""));
+  const out = d.edges.filter(x => x.from === n.id);
+  const into = d.edges.filter(x => x.to === n.id);
+  const routes = out.length ? `<ul class="wf-routes">${out.map(x => `<li>${x.label ? `<code>${e(x.label)}</code> → ` : "then → "}<a href="#" data-goto="${e(x.to)}">${label(x.to)}</a></li>`).join("")}</ul>` : "";
+  const from = into.length ? into.map(x => `<a href="#" data-goto="${e(x.from)}">${label(x.from)}</a>`).join(", ") : "";
+  return `<div class="wf-detail-head"><span class="chip" style="background:${WF_FILL[n.kind]};color:${["shell", "llm", "call", "end"].includes(n.kind) ? "#fefefe" : "#1e1e1e"}">${e(WF_KIND[n.kind])}</span><b>${e(n.label)}</b><span style="flex:1"></span><button class="b small wf-close" title="close">✕</button></div>
+    <div class="conn-meta wf-meta">${body}${row("next", routes)}${row("comes from", from)}${row("notes", (n.badges || []).map(b => `<span class="chip">${e(b)}</span>`).join(""))}</div>`;
 }
 function setDiagramStatus(stepId, status) { document.querySelectorAll(`.wf-node[data-node="${CSS.escape(stepId)}"]`).forEach(el => { el.classList.remove("running", "ok", "failed", "skipped"); if (status) el.classList.add(status); }); }
 function resetDiagramStatus() { document.querySelectorAll(".wf-node").forEach(el => el.classList.remove("running", "ok", "failed", "skipped")); }
@@ -1485,7 +1564,7 @@ function renderAgent(runId) {
     <div class="card"><h3>Runs (${runs.length})</h3><div class="runs">${runs.length ? runs.map(r => `<div class="run${r.id === runId ? " sel" : ""}" data-run="${r.id}"><span class="st ${r.status}">${r.status}</span><span>${new Date(r.startedAt).toLocaleString()} · ${r.trigger?.type || "run"}${r.trigger?.from ? " ← " + esc(r.trigger.from) : ""}${r.output ? " · " + esc(r.output.split("\n")[0].slice(0, 70)) : r.error ? " · " + esc(r.error.slice(0, 70)) : ""}</span><span class="hint">${r.cost ? "$" + r.cost.totalUsd.toFixed(4) + " · " : ""}${r.toolCalls} tools${r.reflexBlocks ? " · " + r.reflexBlocks + " blocked" : ""}${r.endedAt ? " · " + Math.round((r.endedAt - r.startedAt) / 1000) + "s" : ""}${r.resumes ? " · resumed×" + r.resumes : ""}${r.resumable ? ` <button class="b small" data-resume="${r.id}" title="continue from the last completed step">resume</button>` : ""}</span></div>`).join("") : `<div class="fs-empty">no runs yet</div>`}</div></div>
     <div class="card" id="runCard" style="display:none"><h3 id="runTitle">run</h3><div class="rowbtns"><button class="b small" id="runCancel">cancel run</button></div><div id="runChat" style="display:flex;flex-direction:column;gap:6px"></div><div class="rowbtns"><button class="b small" id="runMin">minimize ▾</button></div></div>`;
   $("#aRun").onclick = async () => { const input = await askText(`Run ${a.name}`, "input for {{input}} (optional)", ""); if (input === null) return; const { runId } = await api(`/api/agents/${a.id}/run`, { method: "POST", body: JSON.stringify({ input }), headers: { "Content-Type": "application/json" } }); setTimeout(() => openAgent(a.id, runId), 400); };
-  drawDiagram(state.agentDiagram, $("#agentDiagram"));
+  drawDiagram(state.agentDiagram, $("#agentDiagram"), a.steps);
   $("#aMermaid").onclick = () => copyText(state.agentMermaid || "");
   $("#aEdit").onclick = () => { state.editing = true; renderAgent(); };
   $("#aToggle").onclick = async () => { await api(`/api/agents/${a.id}/toggle`, { method: "POST" }); openAgent(a.id); };
