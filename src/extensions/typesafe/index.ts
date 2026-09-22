@@ -8,7 +8,7 @@ import type { ReflexConfig, RiskAppetite } from "../../config.js";
 import { noul } from "./client.js";
 import { registerGate, updateStatus } from "./gate.js";
 import { registerMonitor } from "./monitor.js";
-import { registerRouter } from "./router.js";
+import { registerRouter, effectiveRouting, routeStatus } from "./router.js";
 import { registerSelector } from "./selector.js";
 import { ReflexState } from "./state.js";
 
@@ -73,9 +73,9 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		});
 
 		pi.registerCommand("reflex", {
-			description: "Reflex policy: /reflex [appetite cautious|balanced|bold | gate on|off | monitor on|off | route on|off | verbose on|off | routing fast=<model> default=<model> strong=<model> | stats | last | off | on]",
+			description: "Reflex policy: /reflex [appetite cautious|balanced|bold | gate on|off | monitor on|off | route on|off|auto|pin | verbose on|off | routing fast=<model> default=<model> strong=<model> | session fast=<model>@<effort> … | session clear | stats | last | off | on]",
 			getArgumentCompletions: (prefix) => {
-				const items = ["appetite", "gate", "monitor", "route", "routing", "verbose", "select", "stats", "last", "on", "off"].filter((c) => c.startsWith(prefix)).map((c) => ({ value: c, label: c }));
+				const items = ["appetite", "gate", "monitor", "route", "routing", "session", "verbose", "select", "stats", "last", "on", "off"].filter((c) => c.startsWith(prefix)).map((c) => ({ value: c, label: c }));
 				return items.length ? items : null;
 			},
 			handler: async (args, ctx) => handleCommand(args, ctx, state),
@@ -100,6 +100,8 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 				`appetite: ${theme.fg("accent", p.riskAppetite)}   gate: ${onOff(p.gateToolCalls)}   monitor: ${onOff(p.monitorProgress)}   route: ${onOff(p.routeModels)}   verbose: ${onOff(p.verbose)}`,
 				`timeout: ${p.timeoutMs}ms   protected: ${p.protectedPaths.length} patterns`,
 				`routing: ${(["fast", "default", "strong"] as const).map((t) => `${t}=${p.routing[t] ?? "-"}${p.routingEffort?.[t] ? `@${p.routingEffort[t]}` : ""}`).join("  ")}`,
+				...(state.sessionRoute.pinned ? [theme.fg("accent", `this session: ${state.sessionRoute.pinned} pinned, routing paused (/reflex route auto)`)] : []),
+				...(Object.keys(state.sessionRoute.routing).length || Object.keys(state.sessionRoute.effort).length ? [theme.fg("accent", `this session: ${(["fast", "default", "strong"] as const).map((t) => { const e = effectiveRouting(state); return `${t}=${e.tiers[t] ?? "-"}${e.effort[t] ? `@${e.effort[t]}` : ""}`; }).join("  ")}`)] : []),
 				theme.fg("dim", "usage: /reflex appetite <cautious|balanced|bold> · gate on|off · monitor on|off · route on|off · provider typesafe|openrouter · model [id] · routing fast=<provider/model> … · stats · last"),
 			];
 			ctx.ui.setWidget("reflex-info", lines);
@@ -126,8 +128,39 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 			p.monitorProgress = rest[0] !== "off";
 			break;
 		case "route":
+			// Session-only: resume routing over a pinned model, or pin the current one. Not saved.
+			if (rest[0] === "auto" || rest[0] === "pin") {
+				state.sessionRoute.pinned = rest[0] === "pin" && ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+				ctx.ui.setStatus("reflex-route", routeStatus(state));
+				return say(state.sessionRoute.pinned ? `pinned ${state.sessionRoute.pinned} for this session; routing paused` : "routing resumed for this session: Reflex picks the model per request again");
+			}
 			p.routeModels = rest[0] !== "off";
 			break;
+		case "session": {
+			// Tier models / efforts for this session only: /reflex session fast=provider/model@low strong=…@high | clear
+			if (rest[0] === "clear") {
+				state.sessionRoute.routing = {};
+				state.sessionRoute.effort = {};
+			} else {
+				for (const kv of rest) {
+					const eq = kv.indexOf("=");
+					const k = kv.slice(0, eq) as "fast" | "default" | "strong";
+					const v = kv.slice(eq + 1);
+					if (eq < 0 || !["fast", "default", "strong"].includes(k)) continue;
+					const at = v.lastIndexOf("@");
+					const model = at > 0 ? v.slice(0, at) : v;
+					const effort = at > 0 ? v.slice(at + 1).toLowerCase() : undefined;
+					if (model && model !== "saved") state.sessionRoute.routing[k] = model;
+					else delete state.sessionRoute.routing[k];
+					if (effort) state.sessionRoute.effort[k] = effort;
+					else if (model === "saved") delete state.sessionRoute.effort[k];
+				}
+				if (!rest.length) return say("usage: /reflex session fast=<provider/model>[@effort] default=… strong=…  (\"saved\" = use the saved tier) · /reflex session clear");
+			}
+			ctx.ui.setStatus("reflex-route", routeStatus(state));
+			const e = effectiveRouting(state);
+			return say(`this session routes: ${(["fast", "default", "strong"] as const).map((t) => `${t}=${e.tiers[t] ?? "-"}${e.effort[t] ? `@${e.effort[t]}` : ""}`).join("  ")} (not saved)`);
+		}
 		case "verbose":
 			p.verbose = rest[0] !== "off";
 			break;

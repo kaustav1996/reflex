@@ -696,6 +696,11 @@
   .md-details { border-left: 2px solid var(--line); margin: 4px 0; padding: 2px 8px; color: var(--gray); font-size: 12px; }
   .md-details > summary { cursor: pointer; font-weight: 700; }
   .md-details[open] { color: var(--ink); }
+  .mroute { border: 1px solid var(--line); padding: 8px; margin-bottom: 8px; font-size: 12px; }
+  .mroute-mode { margin-bottom: 6px; }
+  .mroute summary { cursor: pointer; font-weight: 700; }
+  .mtiers { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 8px; align-items: center; margin: 8px 0; }
+  .mtiers select { font: inherit; padding: 4px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); min-width: 0; max-width: 100%; }
   .rec-card { border: 1px solid var(--line); padding: 10px; margin: 6px 0 10px; box-shadow: 2px 2px 0 var(--pink); }
   .rec-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
   .conn-src { font-size: 9px; font-weight: 700; letter-spacing: .04em; border: 1px solid var(--gray); color: var(--gray); padding: 0 3px; vertical-align: middle; }
@@ -1146,7 +1151,19 @@ function pickModel(models) {
     .sort((a, b) => (a.ref === cur ? -1 : b.ref === cur ? 1 : 0) || a.m.provider.localeCompare(b.m.provider) || a.m.cost.input - b.m.cost.input || a.ref.localeCompare(b.ref));
   const o = $("#overlay"); o.classList.add("show");
   $("#dTitle").textContent = "Model";
-  $("#dBody").innerHTML = `<input id="mFilter" placeholder="filter: claude, gpt-5, deepseek, :free …" spellcheck="false">
+  const pinned = (v?.status?.["reflex-route"] || "").startsWith("📌");
+  const TIERS = ["fast", "default", "strong"], EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+  // What this page applied to the session, kept across reloads (the session itself holds the real overrides).
+  const tierKey = `reflex-session-tiers:${state.current}`;
+  const sess = v ? (v.sessionTiers ||= (() => { try { return JSON.parse(sessionStorage.getItem(tierKey) || "null"); } catch { return null; } })() || { routing: {}, effort: {} }) : { routing: {}, effort: {} };
+  const keepTiers = () => { try { sessionStorage.setItem(tierKey, JSON.stringify(sess)); } catch {} };
+  $("#dBody").innerHTML = `<div class="mroute">
+      <div class="mroute-mode">${pinned ? `📌 <b>${esc(cur)}</b> is pinned for this session; Reflex routing is paused. <button class="b small" id="mAuto">resume auto routing</button>` : `⇄ Reflex picks the model for each request from the tiers below. <span class="hint">Picking a model in the list pins it for this session and pauses routing.</span>`}</div>
+      <details id="mTiers"${Object.keys(sess.routing).length || Object.keys(sess.effort).length ? " open" : ""}><summary>This session's tiers <span class="hint">(fast / default / strong, not saved)</span></summary>
+        <div class="mtiers" id="mTierRows"><span class="hint">loading your saved tiers…</span></div>
+        <div class="rowbtns"><button class="b small primary" id="mTierApply">apply to this session</button><button class="b small" id="mTierClear">back to saved tiers</button></div>
+      </details></div>
+    <input id="mFilter" placeholder="filter: claude, gpt-5, deepseek, :free …" spellcheck="false">
     <div class="mhead"><span>model</span><span>ctx</span><span>$in</span><span>$out</span><span></span></div>
     <div class="mlist" id="mList"></div>`;
   const opts = $("#dOpts"), row = $("#dRow"); opts.innerHTML = ""; row.innerHTML = "";
@@ -1155,11 +1172,33 @@ function pickModel(models) {
     const q = filter.value.trim().toLowerCase();
     const shown = rows.filter(r => !q || r.search.includes(q)).slice(0, 300);
     list.innerHTML = shown.map(r => `<div class="mrow${r.ref === cur ? " cur" : ""}" data-ref="${esc(r.ref)}"><span class="mname"><span class="mprov">${esc(r.m.provider)}</span>${esc(r.m.id)}</span><span>${ctx(r.m.contextWindow)}</span><span>${price(r.m.cost.input)}</span><span>${price(r.m.cost.output)}</span><span class="mflags">${r.m.reasoning ? "R" : ""}${(r.m.input || []).includes("image") ? "I" : ""}</span></div>`).join("") || `<div class="fs-empty">no match</div>`;
-    list.querySelectorAll(".mrow").forEach(el => el.onclick = () => { const r = rows.find(x => x.ref === el.dataset.ref); hideDialog(); rpc({ type: "set_model", provider: r.m.provider, modelId: r.m.id }); });
+    // Picking a model pins it; picking the one already in use pins it too (Pi sees no change, so ask directly).
+    list.querySelectorAll(".mrow").forEach(el => el.onclick = () => { const r = rows.find(x => x.ref === el.dataset.ref); hideDialog(); if (r.ref === cur) rpc({ type: "prompt", message: "/reflex route pin" }); else rpc({ type: "set_model", provider: r.m.provider, modelId: r.m.id }); });
   };
   filter.oninput = draw; filter.onkeydown = e => { if (e.key === "Escape") hideDialog(); if (e.key === "Enter") { const first = list.querySelector(".mrow"); if (first) first.click(); } };
-  draw(); setTimeout(() => filter.focus(), 0);
+  draw(); setTimeout(() => filter.focus({ preventScroll: true }), 0);
   const c = document.createElement("button"); c.className = "b"; c.textContent = "Cancel"; c.onclick = hideDialog; row.appendChild(c);
+  const cmd = text => rpc({ type: "prompt", message: text });
+  $("#mAuto") && ($("#mAuto").onclick = () => { hideDialog(); cmd("/reflex route auto"); });
+  // Tier rows: each defaults to the saved tier; a change applies to this session only.
+  api("/api/settings").then(d => {
+    const saved = d.config?.reflex?.routing || {}, savedEff = d.config?.reflex?.routingEffort || {};
+    const box = $("#mTierRows"); if (!box) return;
+    const refs = rows.map(r => r.ref);
+    box.innerHTML = TIERS.map(t => `<label>${t}</label>
+      <select data-tier="${t}"><option value="saved">saved: ${esc(saved[t] || "none")}</option>${refs.map(r => `<option value="${esc(r)}"${sess.routing[t] === r ? " selected" : ""}>${esc(r)}</option>`).join("")}</select>
+      <select data-eff="${t}"><option value="saved">effort: ${esc(savedEff[t] || "model default")}</option>${EFFORTS.map(e => `<option${sess.effort[t] === e ? " selected" : ""}>${e}</option>`).join("")}</select>`).join("");
+  }).catch(e => { const box = $("#mTierRows"); if (box) box.textContent = "could not load saved tiers: " + e.message; });
+  $("#mTierApply").onclick = () => {
+    const parts = TIERS.map(t => {
+      const m = $(`[data-tier="${t}"]`)?.value || "saved", e = $(`[data-eff="${t}"]`)?.value || "saved";
+      if (m === "saved") delete sess.routing[t]; else sess.routing[t] = m;
+      if (e === "saved") delete sess.effort[t]; else sess.effort[t] = e;
+      return `${t}=${m}${e !== "saved" ? "@" + e : ""}`;
+    });
+    keepTiers(); hideDialog(); cmd(`/reflex session ${parts.join(" ")}`);
+  };
+  $("#mTierClear").onclick = () => { sess.routing = {}; sess.effort = {}; keepTiers(); hideDialog(); cmd("/reflex session clear"); };
 }
 
 // ── composer + voice ────────────────────────────────────────────────────

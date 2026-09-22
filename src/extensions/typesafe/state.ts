@@ -26,6 +26,8 @@ export interface MonitorStats {
 	driftWarnings: number;
 }
 
+export type RouteTier = "fast" | "default" | "strong";
+
 export interface RouterStats {
 	decisions: number;
 	switches: number;
@@ -51,6 +53,13 @@ export class ReflexState {
 	readonly gate: GateStats = { allowed: 0, asked: 0, userAllowed: 0, userDenied: 0, blocked: 0, degraded: 0, skipped: 0 };
 	readonly monitor: MonitorStats = { checks: 0, loopNudges: 0, errorNudges: 0, verifyNudges: 0, driftWarnings: 0 };
 	readonly router: RouterStats = { decisions: 0, switches: 0, byTier: {} };
+	/**
+	 * Routing for this session only (never saved): a model the user picked, which pauses routing,
+	 * and tier models / efforts that replace the saved ones until the session ends.
+	 */
+	readonly sessionRoute: { pinned?: string; routing: Partial<Record<RouteTier, string>>; effort: Partial<Record<RouteTier, string>> } = { routing: {}, effort: {} };
+	/** True while the router itself is switching models, so its own switch isn't taken for the user's pick. */
+	routerSwitching = false;
 	/** Actions the user allowed for the rest of the session (exact and scoped keys). */
 	readonly sessionAllow = new Set<string>();
 	/** Human-readable log of what the user allowed; sent to Jev as context so it stops re-asking about the same kind of thing. */
