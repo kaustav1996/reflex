@@ -62,10 +62,21 @@ export interface AgentDefinition {
 	timeoutMinutes?: number;
 	/** Hard stops for one run. A run that would cross one ends as failed with a `budget:` error. */
 	limits?: RunLimits;
+	/**
+	 * Definitions this agent can create helper agents from with a `spawn` step (e.g. a monitor per
+	 * ticket). `{{spawn.<name>}}` placeholders are filled from the step's `with` when the child is
+	 * created; every other placeholder is left for the child's own runs.
+	 */
+	templates?: Record<string, AgentTemplate>;
+	/** The agent that created this one with a `spawn` step. */
+	parent?: string;
 	enabled: boolean;
 	createdAt: number;
 	updatedAt: number;
 }
+
+/** What a `spawn` step creates a child agent from: an agent definition without id and bookkeeping. */
+export type AgentTemplate = Partial<Omit<AgentDefinition, "id" | "createdAt" | "updatedAt" | "parent" | "templates">> & { name: string };
 
 export interface RunLimits {
 	/** Step executions in a workflow run (default 200). */
@@ -125,6 +136,10 @@ export interface AgentRun {
 	idempotencyKey?: string;
 	/** How many times this run was continued from its checkpoint. */
 	resumes?: number;
+	/** A trial run: steps tagged (or defaulting to) `external` were not executed, only reported. */
+	trial?: boolean;
+	/** Trial runs: the steps that were skipped because they reach outside this machine. */
+	skippedExternal?: string[];
 }
 
 export function agentsDir(): string {
@@ -243,6 +258,13 @@ export function deleteAgent(id: string): void {
 	if (!ID_RE.test(id)) return;
 	rmSync(agentDir(id), { recursive: true, force: true });
 }
+
+/** Agents a `spawn` step of `parentId` created. */
+export function listChildren(parentId: string): AgentDefinition[] {
+	return listAgents().filter((a) => a.parent === parentId);
+}
+
+export const isValidAgentId = (id: string) => ID_RE.test(id);
 
 export function listRuns(agentId: string, limit = 50): AgentRun[] {
 	const dir = agentRunsDir(agentId);

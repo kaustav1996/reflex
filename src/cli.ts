@@ -164,6 +164,8 @@ Usage:
   reflex doctor                               check keys, ffmpeg, TypeSafe reachability
   reflex web [--port 7331] [--no-open]        browser interface: sessions, agents (cron/webhooks), settings
   reflex agent list|run|runs|create|delete    scheduled / webhook agents (see skill reflex-agents)
+  reflex agent run <id> --trial               trial run: external steps are reported, not run
+  reflex agent export <id> | import <file>     share an agent as a .reflex-agent.json; import opens a review session
   reflex jev --state <text|@file> --questions <json|@file>   ask TypeSafe Jev directly (typed decisions in ~100ms)
   reflex connect [id]                          enable a built-in MCP connector (gmail, slack, atlassian, linear)
   reflex install <source> | remove <source>    install or remove a Pi package (e.g. git:github.com/affaan-m/ECC)

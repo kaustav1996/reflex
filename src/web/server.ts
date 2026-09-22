@@ -32,12 +32,14 @@ import { cleanTitle } from "./titles.js";
 import { describeCron, parseCron } from "../agents/cron.js";
 import { attachRunListener, cancelRun, getLiveRun, liveRunsForAgent, resumeRun, runAgent } from "../agents/runner.js";
 import { startScheduler } from "../agents/scheduler.js";
-import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listBrokenAgents, listRuns, loadAgent, loadRun, runLogPath, saveAgent, findRunByKey, loadCheckpoint } from "../agents/store.js";
+import { type AgentDefinition, agentSessionsDir, deleteAgent, listAgents, listBrokenAgents, listChildren, listRuns, loadAgent, loadRun, runLogPath, saveAgent, findRunByKey, loadCheckpoint } from "../agents/store.js";
 import { getReflexHome, loadReflexConfig as loadCfg, saveReflexConfig, SERVICE_ENV, storeKey } from "../config.js";
 import { loadMcpConfig, McpClient, saveMcpConfig } from "../extensions/mcp/client.js";
 import { buildPresetConfig, persistServer, removeConnector } from "../extensions/mcp/connect.js";
 import { PRESET_META } from "../extensions/mcp/presets.js";
 import { listOtherSkills, listPackageSkills, setPackageSkills } from "../skills/packages.js";
+import { buildBundle, collectRequirements, findParamCandidates, judgeCandidates, suggestEffects, type ExportChoices } from "../agents/bundle.js";
+import { checkValues, discardStaged, getStaged, installStaged, listStaged, stageBundle } from "../agents/staging.js";
 import { attachDeployListener, deployArtifact, destroyArtifact, liveDeploy, registerArtifact } from "../artifacts/deploy.js";
 import { agentDiagram, toMermaid } from "../agents/diagram.js";
 import { deleteGlobalHook, EVENT_HELP, globalHooksPath, HOOK_EVENTS, listGlobalHooks, saveGlobalHook } from "../hooks/store.js";
@@ -539,23 +541,79 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				const a = saveAgent(body);
 				return json(res, 201, { agent: a });
 			}
+			// ── Sharing: export an agent as a bundle; imported bundles wait in staging for review ──
+			const ex = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)\/export(\/prepare)?$/);
+			if (ex && req.method === "POST") {
+				const agent = loadAgent(ex[1]);
+				if (!agent) return json(res, 404, { error: "no such agent" });
+				try {
+					if (ex[2]) {
+						// The Share dialog: candidate parameters (Jev-judged), suggested effects, requirements.
+						const [candidates, effects] = await Promise.all([judgeCandidates(agent, findParamCandidates(agent)), suggestEffects(agent.steps ?? [])]);
+						return json(res, 200, { candidates, effects, requires: collectRequirements(agent), steps: (agent.steps ?? []).map((st, i) => ({ id: st.id ?? `step${i + 1}`, type: st.type })) });
+					}
+					const choices = JSON.parse((await readBody(req)).toString("utf8") || "{}") as ExportChoices;
+					return json(res, 200, buildBundle(agent, { params: choices.params ?? [], effects: choices.effects, meta: choices.meta, trialInput: choices.trialInput }));
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			if (url.pathname === "/api/agents/staging" && req.method === "GET") return json(res, 200, { staged: listStaged().map((x) => ({ id: x.id, name: x.bundle.meta.name, cwd: x.cwd, createdAt: x.createdAt })) });
+			if (url.pathname === "/api/agents/staging" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req, 4 * 1024 * 1024)).toString("utf8") || "{}") as { bundle?: unknown; source?: string; cwd?: string };
+				try {
+					const cwd = body.cwd ? resolve(body.cwd.replace(/^~(?=$|\/)/, homedir())) : undefined;
+					const st = await stageBundle(body.bundle, { source: body.source, cwd });
+					return json(res, 201, { id: st.id, name: st.bundle.meta.name, params: st.bundle.params.length, warnings: st.bundle.requires?.warnings ?? [] });
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+			}
+			const stm = url.pathname.match(/^\/api\/agents\/staging\/([a-z0-9-]+)(?:\/(install|discard|diagram))?$/);
+			if (stm) {
+				const st = getStaged(stm[1]);
+				if (!st) return json(res, 404, { error: "no such staged agent (it may have been added or discarded)" });
+				if (!stm[2] && req.method === "GET") {
+					const problems = checkValues(st);
+					return json(res, 200, { id: st.id, name: st.bundle.meta.name, version: st.bundle.meta.version, author: st.bundle.meta.author, params: st.bundle.params.map((p) => ({ ...p, value: st.values[p.id] ?? null })), problems, trial: st.trial ?? null, warnings: st.bundle.requires?.warnings ?? [] });
+				}
+				if (stm[2] === "diagram" && req.method === "GET") {
+					const diagram = agentDiagram(st.draft as AgentDefinition);
+					return json(res, 200, { diagram, steps: st.draft.steps ?? [] });
+				}
+				// Only a click in the UI reaches these; the session's tools ask the user to confirm.
+				if (stm[2] === "install" && req.method === "POST") {
+					const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { enable?: boolean };
+					try {
+						return json(res, 200, { agent: installStaged(st.id, { enable: !!body.enable }) });
+					} catch (err) {
+						return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+					}
+				}
+				if (stm[2] === "discard" && req.method === "POST") {
+					discardStaged(st.id);
+					return json(res, 200, { ok: true });
+				}
+			}
 			const am = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)(?:\/(run|runs|toggle))?$/);
 			if (am) {
 				const agent = loadAgent(am[1]);
 				if (!agent) return json(res, 404, { error: "no such agent" });
 				if (!am[2] && req.method === "GET") {
 					const diagram = agentDiagram(agent);
-					return json(res, 200, { agent, runs: listRuns(agent.id, 100).map((r) => ({ ...r, resumable: !!agent.steps?.length && r.status !== "succeeded" && r.status !== "running" && r.status !== "queued" && !!loadCheckpoint(agent.id, r.id) })), live: liveRunsForAgent(agent.id).map((r) => r.id), diagram, mermaid: toMermaid(diagram) });
+					return json(res, 200, { agent, children: listChildren(agent.id).map((c) => ({ id: c.id, name: c.name, enabled: c.enabled })), runs: listRuns(agent.id, 100).map((r) => ({ ...r, resumable: !!agent.steps?.length && r.status !== "succeeded" && r.status !== "running" && r.status !== "queued" && !!loadCheckpoint(agent.id, r.id) })), live: liveRunsForAgent(agent.id).map((r) => r.id), diagram, mermaid: toMermaid(diagram) });
 				}
 				if (!am[2] && req.method === "DELETE") {
 					for (const r of liveRunsForAgent(agent.id)) cancelRun(r.id);
+					// ?children=1 also deletes the helper agents this one created with spawn steps.
+					if (url.searchParams.get("children") === "1") for (const c of listChildren(agent.id)) deleteAgent(c.id);
 					deleteAgent(agent.id);
 					return json(res, 200, { ok: true });
 				}
 				if (am[2] === "toggle" && req.method === "POST") return json(res, 200, { agent: saveAgent({ ...agent, enabled: !agent.enabled }) });
 				if (am[2] === "run" && req.method === "POST") {
-					const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { input?: string };
-					const runPromise = runAgent(agent, { type: "manual" }, body.input);
+					const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { input?: string; trial?: boolean };
+					const runPromise = runAgent(agent, { type: "manual" }, body.input, undefined, { trial: !!body.trial });
 					const id = await new Promise<string>((r) => setTimeout(() => r(listRuns(agent.id, 1)[0]?.id ?? ""), 150));
 					void runPromise;
 					return json(res, 202, { runId: id });

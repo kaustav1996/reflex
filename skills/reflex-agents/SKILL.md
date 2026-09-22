@@ -247,6 +247,48 @@ A command gets the payload as JSON on stdin and `REFLEX_*` env vars; on `before_
 awaited and exit code 2 blocks the tool call, with its output as the reason. Runs started by a
 hook do not fire hooks themselves, so there are no loops.
 
+### Effects and trial runs
+
+Tag every step with what it can change: `"effect": "read"` (only reads), `"local"` (changes files
+on this machine, e.g. edits or commits in a checkout) or `"external"` (anything others can see:
+push, merge request, ticket comment, message, deploy). Untagged `shell`, `llm`, `call` and `spawn`
+steps count as external. A **trial run** (the "trial run" button, `reflex agent run <id> --trial`)
+executes read and local steps and only reports external ones with what they would have done, so
+the whole workflow can be tested before it touches anything shared. Tag accurately: a step tagged
+`read` that pushes would run in a trial.
+
+### Helper agents: `spawn`, never curl the local API
+
+When an agent needs follow-up agents (a monitor per ticket that watches an MR), keep their
+definition in the agent's `templates` and create them with a `spawn` step. Don't `curl`
+`http://127.0.0.1:7331/api/agents`: that ties the agent to one machine and port and can't be shared.
+
+```json
+"templates": {
+  "monitor": { "name": "Monitor {{spawn.ticket}}", "prompt": "Check MR {{spawn.mr}} for review comments. {{input}}",
+               "triggers": [{ "type": "cron", "schedule": "*/30 * * * *" }] }
+},
+"steps": [
+  { "id": "watch", "type": "spawn", "effect": "external", "template": "monitor",
+    "agent": "monitor-{{triage.json.key}}", "with": { "ticket": "{{triage.json.key}}", "mr": "{{push.json.url}}" } },
+  { "id": "stop_watch", "type": "spawn", "action": "delete", "agent": "monitor-{{triage.json.key}}" }
+]
+```
+
+Only `{{spawn.<name>}}` placeholders are filled when the helper is created; everything else
+(`{{input}}`, step variables) is left for the helper's own runs. Actions: `create` (default),
+`run` (`input`, `wait`), `enable`, `disable`, `delete`, and only on helpers this agent created.
+Spawn steps never run in a trial.
+
+### Sharing agents
+
+`export_agent` (or the Share button on the agent page) writes a `.reflex-agent.json` bundle:
+machine-specific values become `{{param.X}}` parameters, requirements (connectors, CLIs, secret
+names, Jev) are listed, secrets are never included. Someone imports it with the Import button in
+the Agents tab, by attaching it to a session, or with `reflex agent import <file>`; a session then
+reviews it with them (skill `reflex-agent-import`). Build agents so they share well: tag effects,
+use `spawn` for helpers, keep secrets in the environment.
+
 ### The diagram
 
 Every agent has a workflow diagram in the Agents tab (and `reflex agent diagram <id>` prints it

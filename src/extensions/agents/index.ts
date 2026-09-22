@@ -21,6 +21,7 @@ import { resolve } from "node:path";
 import { parseCron } from "../../agents/cron.js";
 import { agentFileError, agentsDir, deleteAgent, listAgents, listBrokenAgents, loadAgent, saveAgent } from "../../agents/store.js";
 import { liveRunsForAgent, runAgent } from "../../agents/runner.js";
+import { registerSharingTools } from "./sharing.js";
 
 function resolveCwd(cwd: string | undefined): string {
 	if (!cwd) return process.cwd();
@@ -168,6 +169,8 @@ export function createAgentsExtension(): (pi: ExtensionAPI) => void {
 				return new Text(`${theme.fg("toolTitle", theme.bold("run_agent "))}${theme.fg("accent", a.agentId ?? "")}`, 0, 0);
 			},
 		});
+
+		registerSharingTools(pi);
 
 		pi.registerTool({
 			name: "delete_agent",

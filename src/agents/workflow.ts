@@ -21,8 +21,16 @@ export interface RouteRule {
 	when: string;
 	next: string;
 }
+/**
+ * What a step can change: `read` (only reads), `local` (changes files on this machine, e.g. edits a
+ * checkout) or `external` (anything others can see: push, merge request, ticket comment, message,
+ * deploy). Trial runs execute `read` and `local` steps and only report `external` ones.
+ */
+export type StepEffect = "read" | "local" | "external";
+
 interface StepBase {
 	id?: string;
+	effect?: StepEffect;
 	/** Variable name to store the step result under (default: id or step index). */
 	as?: string;
 	next?: string;
@@ -134,12 +142,58 @@ export interface CallStep extends StepBase {
 	agentId: string;
 	input?: string;
 }
+/**
+ * Create or manage a helper agent from one of this agent's `templates` (e.g. a monitor per ticket).
+ *   create:  { "id": "watch", "type": "spawn", "template": "monitor", "agent": "monitor-{{triage.json.key}}", "with": { "ticket": "{{triage.json.key}}" } }
+ *   run / enable / disable / delete:  { "id": "stop_watch", "type": "spawn", "action": "delete", "agent": "monitor-{{triage.json.key}}" }
+ * Only agents this agent created can be run, changed or deleted this way. Never runs in a trial.
+ */
+export interface SpawnStep extends StepBase {
+	type: "spawn";
+	action?: "create" | "run" | "enable" | "disable" | "delete";
+	/** Template name in the agent's `templates` (create only). */
+	template?: string;
+	/** The helper agent's id; a template string over this run's variables. Required except for create, where it defaults to a slug of the template's name. */
+	agent?: string;
+	/** Values for the template's `{{spawn.<name>}}` placeholders; each is a template string over this run's variables. */
+	with?: Record<string, string>;
+	/** create: enable the child (default true). */
+	enable?: boolean;
+	/** run: input for the child's run. */
+	input?: string;
+	/** run: wait for the child's run to finish (default false: start it and continue). */
+	wait?: boolean;
+}
 export interface EndStep extends StepBase {
 	type: "end";
 	status?: "succeeded" | "failed";
 	output?: string;
 }
-export type Step = ShellStep | DecideStep | LlmStep | CallStep | EndStep;
+export type Step = ShellStep | DecideStep | LlmStep | CallStep | SpawnStep | EndStep;
+
+/** A step's effect: its tag, else `read` for decide and end steps and `external` for everything else. */
+export function effectOf(step: Step): StepEffect {
+	if (step.effect === "read" || step.effect === "local" || step.effect === "external") return step.effect;
+	return step.type === "decide" || step.type === "end" ? "read" : "external";
+}
+
+/** Fill a template's `{{spawn.<name>}}` placeholders, leaving every other placeholder for the child's own runs. */
+export function fillSpawnTemplate<T>(value: T, values: Record<string, string>): T {
+	if (typeof value === "string") return value.replace(/\{\{\s*spawn\.(\w+)\s*\}\}/g, (m, k: string) => (k in values ? values[k] : m)) as T;
+	if (Array.isArray(value)) return value.map((v) => fillSpawnTemplate(v, values)) as T;
+	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillSpawnTemplate(v, values)])) as T;
+	return value;
+}
+
+export interface SpawnRequest {
+	action: NonNullable<SpawnStep["action"]>;
+	template?: string;
+	agent?: string;
+	with: Record<string, string>;
+	enable?: boolean;
+	input?: string;
+	wait?: boolean;
+}
 
 export type Vars = Record<string, unknown>;
 
@@ -236,6 +290,10 @@ export interface WorkflowHooks {
 	jev?: { systemOne: (req: never) => Promise<unknown> };
 	/** Runs another agent and waits. */
 	callAgent: (agentId: string, input: string) => Promise<{ status: string; output?: string; error?: string }>;
+	/** Creates or manages a helper agent (spawn steps). */
+	spawnAgent?: (req: SpawnRequest) => Promise<Record<string, unknown>>;
+	/** Trial run: `external` steps (and every spawn step) are reported, not executed. */
+	trial?: boolean;
 	signal?: AbortSignal;
 	cwd: string;
 }
@@ -307,6 +365,17 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 		const started = performance.now();
 		const emitEnd = (ok: boolean, result: unknown, next?: string) => hooks.emit({ type: "step_end", index: i, id, stepType: step.type, ok, ms: Math.round(performance.now() - started), result, next });
 		try {
+			if (hooks.trial && (step.type === "spawn" || (effectOf(step) === "external" && step.type !== "call"))) {
+				// A trial stops at anything that reaches outside this machine: say what would have happened.
+				const wouldRun = step.type === "shell" ? render(step.run, vars) : step.type === "llm" ? render(step.prompt, vars).slice(0, 1500) : step.type === "spawn" ? `${step.action ?? "create"} ${render(step.agent ?? step.template ?? "", vars)}` : "";
+				hooks.emit({ type: "step_start", index: i, id, stepType: step.type, summary: `trial: not run (${step.type === "spawn" ? "spawn" : "external"})` });
+				vars[as] = { skipped: step.type === "spawn" ? "spawn" : "external", ok: true, status: "skipped", stdout: "", output: "" };
+				const next = step.next;
+				emitEnd(true, { skipped: step.type === "spawn" ? "spawn" : "external", wouldRun }, next);
+				i = advance(ids, i, next);
+				saveProgress(id);
+				continue;
+			}
 			switch (step.type) {
 				case "shell": {
 					const cmd = render(step.run, vars);
@@ -427,6 +496,27 @@ export async function runWorkflow(steps: Step[], initialVars: Vars, hooks: Workf
 					if (r.output) lastOutput = r.output;
 					const next = pickNext(step, vars);
 					emitEnd(r.status === "succeeded", r, next);
+					i = advance(ids, i, next);
+					saveProgress(id);
+					break;
+				}
+				case "spawn": {
+					if (!hooks.spawnAgent) throw new Error("spawn steps need the agent runner");
+					const req: SpawnRequest = {
+						action: step.action ?? "create",
+						template: step.template,
+						agent: step.agent ? render(step.agent, vars) : undefined,
+						with: Object.fromEntries(Object.entries(step.with ?? {}).map(([k, v]) => [k, render(String(v), vars)])),
+						enable: step.enable,
+						input: step.input ? render(step.input, vars) : undefined,
+						wait: step.wait,
+					};
+					hooks.emit({ type: "step_start", index: i, id, stepType: "spawn", summary: `${req.action} ${req.agent ?? req.template ?? ""}` });
+					const r = await hooks.spawnAgent(req);
+					vars[as] = r;
+					const next = pickNext(step, vars);
+					emitEnd(r.ok !== false, r, next);
+					if (r.ok === false && !step.route?.length) return { status: "failed", vars, output: lastOutput, error: `${id}: ${String(r.error ?? "spawn failed")}` };
 					i = advance(ids, i, next);
 					saveProgress(id);
 					break;
