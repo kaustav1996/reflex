@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { getReflexHome } from "../config.js";
-import { loadMcpConfig, McpClient } from "../extensions/mcp/client.js";
+import { loadMcpConfig, McpClient, serverForPrefix, toolPrefix } from "../extensions/mcp/client.js";
 import { findPreset } from "../extensions/mcp/presets.js";
 import { dotenvNames } from "../extensions/secrets/store.js";
 import { type AgentBundle, applyBundle, defaultJev, riskRead, type StepRisk, suggestEffects, validateBundle } from "./bundle.js";
@@ -103,8 +103,9 @@ export async function stageBundle(raw: unknown, opts: { source?: string; cwd?: s
 /** The importer's connector for the same service, when the bundle's id isn't configured here. */
 export function suggestConnector(id: string, service: string): string | undefined {
 	const servers = loadMcpConfig().servers;
-	if (servers[id]) return id;
-	const same = Object.keys(servers).find((name) => (findPreset(name)?.label ?? "") === service || name.includes(id) || id.includes(name));
+	const exact = serverForPrefix(servers, id);
+	if (exact) return exact;
+	const same = Object.keys(servers).find((name) => (findPreset(name)?.label ?? "") === service || toolPrefix(name).includes(toolPrefix(id)) || toolPrefix(id).includes(toolPrefix(name)));
 	return same;
 }
 
@@ -204,7 +205,7 @@ export async function checkStaged(id: string, opts: { connectTimeoutMs?: number 
 	const servers = loadMcpConfig().servers;
 	const connectors = await Promise.all(
 		req.connectors.map(async (c) => {
-			const here = s.connectorMap[c.id] ?? c.id;
+			const here = s.connectorMap[c.id] ?? serverForPrefix(servers, c.id) ?? c.id;
 			const cfg = servers[here];
 			const row = { id: c.id, service: c.service, usesHere: here, configured: !!cfg, enabled: !!cfg && cfg.enabled !== false, missingTools: c.tools, error: undefined as string | undefined, suggestion: cfg ? undefined : suggestConnector(c.id, c.service) };
 			if (!cfg || cfg.enabled === false) return row;

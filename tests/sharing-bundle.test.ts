@@ -126,3 +126,14 @@ test("a folder outside home is still the WORKDIR, and ids inside it aren't offer
 	const c = findParamCandidates({ id: "x", name: "x", prompt: "", cwd: "/private/tmp/c1c94182-953c-401f-a9a5-2da0e6716201/work", steps: [{ id: "a", type: "shell", run: "cat /private/tmp/c1c94182-953c-401f-a9a5-2da0e6716201/work/data.json" }] } as never, "/Users/alice");
 	assert.deepEqual(c.map((x) => [x.suggestedId, x.value]), [["WORKDIR", "/private/tmp/c1c94182-953c-401f-a9a5-2da0e6716201/work"]]);
 });
+
+test("a connector with a dash is named as configured, though its tools carry an underscore prefix", async () => {
+	const { saveMcpConfig } = await import("../src/extensions/mcp/client.ts");
+	saveMcpConfig({ servers: { "cloudflare-docs": { url: "https://docs.mcp.cloudflare.com/mcp", enabled: true } } });
+	const r = collectRequirements({ id: "x", name: "x", prompt: "", steps: [{ id: "a", type: "llm", prompt: "p", tools: ["cloudflare_docs__search_cloudflare_documentation"] }] } as never);
+	assert.deepEqual(r.connectors, [{ id: "cloudflare-docs", service: "Cloudflare docs", tools: ["search_cloudflare_documentation"] }]);
+	const { bundle } = buildBundle({ id: "x", name: "x", prompt: "", cwd: "/tmp", steps: [{ id: "a", type: "llm", prompt: "p", tools: ["cloudflare_docs__search_cloudflare_documentation"] }] } as never, { params: [] });
+	const def = applyBundle(bundle, { values: {}, reflexUrl: "http://x", connectorMap: { "cloudflare-docs": "cf-docs" } });
+	assert.deepEqual((def.steps![0] as { tools: string[] }).tools, ["cf_docs__search_cloudflare_documentation"], "renamed to the importer's tool prefix");
+	saveMcpConfig({ servers: {} });
+});

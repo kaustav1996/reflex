@@ -51,6 +51,15 @@ export function cancelRun(runId: string): boolean {
  * Queue a run; resolves when it finishes. With an idempotency key, a trigger that already
  * produced a queued, running or succeeded run returns that run instead of starting another.
  */
+/**
+ * The gate level for a workflow LLM step in a trial. Only read and local steps run in a trial
+ * (external and untagged ones are skipped), so they run as they will for real, never with the gate
+ * off. Forcing cautious blocked ordinary file writes, and a headless step can't ask anyone.
+ */
+function trialReflex(level: AgentDefinition["reflex"]): AgentDefinition["reflex"] {
+	return !level || level === "off" ? "balanced" : level;
+}
+
 export function runAgent(agent: AgentDefinition, trigger: AgentRun["trigger"], input?: string, onEvent?: RunListener, opts: { idempotencyKey?: string; trial?: boolean } = {}): Promise<AgentRun> {
 	if (opts.idempotencyKey && !opts.trial) {
 		const existing = findRunByKey(agent.id, opts.idempotencyKey);
@@ -153,7 +162,7 @@ async function execute(agent: AgentDefinition, run: AgentRun, onEvent?: RunListe
 				saveRun(run); // cost so far survives a crash too
 			},
 			runLlm: async (step, prompt, instructions) => {
-				const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd === undefined ? undefined : Math.max(0, agent.limits.maxCostUsd - cost.totalUsd), model: step.model ?? agent.model, reflex: run.trial ? "cautious" : (step.reflex ?? agent.reflex), tools: step.tools ?? agent.tools, computer: step.computer ?? agent.computer, timeoutMinutes: step.timeoutMinutes ?? agent.timeoutMinutes }, run, prompt, instructions ?? agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
+				const r = await runLlmProcess({ ...agent, maxCostUsd: agent.limits?.maxCostUsd === undefined ? undefined : Math.max(0, agent.limits.maxCostUsd - cost.totalUsd), model: step.model ?? agent.model, reflex: run.trial ? trialReflex(step.reflex ?? agent.reflex) : (step.reflex ?? agent.reflex), tools: step.tools ?? agent.tools, computer: step.computer ?? agent.computer, timeoutMinutes: step.timeoutMinutes ?? agent.timeoutMinutes }, run, prompt, instructions ?? agent.instructions, sessionsDir, cwd, emit, l, controller.signal);
 				run.toolCalls += r.toolCalls;
 				run.reflexBlocks += r.reflexBlocks;
 				return r;

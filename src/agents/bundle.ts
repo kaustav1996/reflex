@@ -16,7 +16,7 @@
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { createKeyResolver, loadDotEnv, loadReflexConfig } from "../config.js";
-import { loadMcpConfig } from "../extensions/mcp/client.js";
+import { loadMcpConfig, serverForPrefix, toolPrefix } from "../extensions/mcp/client.js";
 import { findPreset } from "../extensions/mcp/presets.js";
 import { noul } from "../extensions/typesafe/client.js";
 import { createJevClient } from "../extensions/typesafe/provider.js";
@@ -200,7 +200,9 @@ export function collectRequirements(agent: AgentDefinition): BundleRequirements 
 		tools.get(m[1])!.add(m[2]);
 	}
 	const servers = loadMcpConfig().servers;
-	const connectors = [...tools].map(([id, set]) => {
+	const connectors = [...tools].map(([prefix, set]) => {
+		// Name the connector as it is configured ("cloudflare-docs"), not by its tool prefix.
+		const id = serverForPrefix(servers, prefix) ?? prefix;
 		const s = servers[id];
 		const service = findPreset(id)?.label ?? (s?.url ? new URL(s.url).host : s?.args?.slice(-1)[0] ?? s?.command ?? id);
 		return { id, service, tools: [...set].sort() };
@@ -388,7 +390,10 @@ export function applyBundle(bundle: AgentBundle, opts: { values: Record<string, 
 	def = mapStrings(def, (s) =>
 		s.replace(/\{\{param\.([A-Za-z0-9_]+)\}\}/g, (m, k: string) => opts.values[k] ?? m).replace(/\{\{reflex\.url\}\}/g, opts.reflexUrl.replace(/\/$/, "")),
 	);
-	for (const [from, to] of Object.entries(opts.connectorMap ?? {})) if (from !== to && to) def = mapStrings(def, (s) => s.replace(new RegExp(`\\b${from.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")}__`, "g"), `${to}__`));
+	for (const [from, to] of Object.entries(opts.connectorMap ?? {})) {
+		if (!to || toolPrefix(from) === toolPrefix(to)) continue;
+		def = mapStrings(def, (s) => s.replace(new RegExp(`\\b${toolPrefix(from)}__`, "g"), `${toolPrefix(to)}__`));
+	}
 	return {
 		...def,
 		id: opts.id ?? def.id,

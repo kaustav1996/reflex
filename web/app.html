@@ -1154,6 +1154,17 @@ const isBundleFile = f => /\.reflex-agent\.json$/i.test(f.name || "");
 function importKickoff(id, name) { return `I'm importing the shared agent "${name}" (staged as ${id}). Review it with me using the reflex-agent-import skill: explain what it does, set it up for this machine, check what it needs, and trial-run it when I say so. Don't add it until I decide.`; }
 function rememberStaging(key, id) { view(key).stagingId = id || null; try { id ? sessionStorage.setItem("reflex-staging:" + key, id) : sessionStorage.removeItem("reflex-staging:" + key); } catch {} }
 function stagingOf(key) { const v = view(key); if (v.stagingId === undefined) { try { v.stagingId = sessionStorage.getItem("reflex-staging:" + key) || null; } catch { v.stagingId = null; } } return v.stagingId; }
+/** A reopened tab loses sessionStorage: adopt the one agent still staged in this session's folder. */
+async function adoptStaging(key) {
+  const s = state.sessions.find(x => "web:" + x.id === key); if (!s) return null;
+  try {
+    const { staged } = await api("/api/agents/staging");
+    const mine = staged.filter(x => x.cwd === s.cwd);
+    if (mine.length !== 1) return null;
+    rememberStaging(key, mine[0].id);
+    return mine[0].id;
+  } catch { return null; }
+}
 async function readBundle(file) {
   let bundle; try { bundle = JSON.parse(await file.text()); } catch { notice("error", `${file.name} isn't JSON`); return null; }
   if (bundle?.reflexAgent !== 1) { notice("error", `${file.name} isn't a Reflex agent bundle`); return null; }
@@ -1176,7 +1187,9 @@ let stagingPolledAt = 0;
 /** The bar above the chat while a session reviews a shared agent: status, diagram, Add agent, Discard. */
 async function drawStagingBar(force) {
   const bar = $("#stagingBar"); const key = state.current;
-  const id = key && key.startsWith("web:") && state.tab !== "agents" ? stagingOf(key) : null;
+  const here = key && key.startsWith("web:") && state.tab !== "agents";
+  const id = here ? stagingOf(key) || (view(key).stagingAdopted ? null : await adoptStaging(key)) : null;
+  if (here) view(key).stagingAdopted = true;
   const v = key ? view(key) : null;
   if (!id) { if (v?.stagingDone) { bar.hidden = false; bar.innerHTML = v.stagingDone; wireStagingDone(); } else bar.hidden = true; return; }
   if (!force && Date.now() - stagingPolledAt < 4000 && bar.dataset.id === id && !bar.hidden) return;
@@ -1496,7 +1509,7 @@ async function refreshAgents() {
   $("#agImportFile").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importAgentFile(f); };
   box.ondragover = e => { e.preventDefault(); box.classList.add("drop"); };
   box.ondragleave = () => box.classList.remove("drop");
-  box.ondrop = e => { e.preventDefault(); box.classList.remove("drop"); const f = [...(e.dataTransfer?.files || [])][0]; if (f) importAgentFile(f); };
+  box.ondrop = e => { e.preventDefault(); e.stopPropagation(); box.classList.remove("drop"); const f = [...(e.dataTransfer?.files || [])][0]; if (f) importAgentFile(f); };
 }
 /** An agent whose agent.json doesn't parse: say where it broke and how to fix it, instead of a blank page. */
 function openBrokenAgent(id) {
