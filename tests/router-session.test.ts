@@ -9,6 +9,7 @@ process.env.REFLEX_NO_CALL_LOG = "1";
 const { loadReflexConfig } = await import("../src/config.ts");
 const { ReflexState } = await import("../src/extensions/typesafe/state.ts");
 const { effectiveRouting, registerRouter, routeStatus } = await import("../src/extensions/typesafe/router.ts");
+const { registerRequestBrief } = await import("../src/extensions/typesafe/brief.ts");
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
 
@@ -56,6 +57,8 @@ function setup(tier: "fast" | "default" | "strong" = "fast", confidence = 0.9) {
 		},
 	};
 	registerRouter(pi as never, state);
+	// Routing rides on the one per-request call, next to the relevance questions.
+	registerRequestBrief(pi as never, state);
 	const prompt = (text = "rename this variable across the file") => handlers.before_agent_start({ type: "before_agent_start", prompt: text, systemPrompt: "" }, ctx);
 	const userPicks = (provider: string, id: string) => handlers.model_select({ type: "model_select", model: { provider, id }, previousModel: current, source: "set" }, ctx);
 	return { state, prompt, userPicks, switched, jev: () => jevCalls, seenStates };

@@ -6,14 +6,15 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { choice, isValidChoice, type ChoiceAnswer } from "./client.js";
+import { isValidChoice, type ChoiceAnswer } from "./client.js";
+import { buildSelectionQuestions, MAX_CHOICE_OPTIONS, MIN_HINT_PROBABILITY } from "./policy.js";
 import { clip } from "./context.js";
 import type { ReflexState } from "./state.js";
 import { loadMcpConfig } from "../mcp/client.js";
 
-export const MIN_HINT_PROBABILITY = 0.5;
-/** Options offered in one Jev Choice. Jev accepts up to 255; "none" takes one slot. */
-export const MAX_CHOICE_OPTIONS = 250;
+// The numbers and the question wording live with the gate's, in policy.ts; re-exported so the
+// selector's callers and tests keep one import.
+export { MAX_CHOICE_OPTIONS, MIN_HINT_PROBABILITY } from "./policy.js";
 
 const STOP = new Set(["the", "and", "for", "with", "that", "this", "from", "into", "your", "you", "are", "can", "use", "when", "what", "how", "please", "need", "want", "make", "help"]);
 const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w)));
@@ -61,46 +62,45 @@ export function hintsFrom(
 	return hints;
 }
 
-export function registerSelector(pi: ExtensionAPI, state: ReflexState): void {
-	pi.on("before_agent_start", async (event, ctx) => {
-		const policy = state.config.reflex;
-		if (!policy.enabled || !state.client || policy.selectSkills === false) return undefined;
-		const prompt = event.prompt?.trim();
-		if (!prompt || prompt.startsWith("/") || prompt.length < 12) return undefined;
-		const allSkills = (event.systemPromptOptions?.skills ?? []) as Array<{ name: string; description?: string }>;
-		const skills = shortlist(allSkills.map((sk) => ({ ...sk, text: sk.description })), prompt);
-		const servers = shortlist(Object.entries(loadMcpConfig().servers).filter(([, s]) => s.enabled !== false).map(([name, s]) => ({ name, hint: s.command ? [s.command, ...(s.args ?? [])].join(" ") : (s.url ?? ""), text: name })), prompt);
-		if (skills.length + servers.length === 0) return undefined;
+/** The questions to ask about this request, and the rosters the answers are checked against. */
+export function selectionQuestions(
+	state: ReflexState,
+	prompt: string,
+	allSkills: Array<{ name: string; description?: string }>,
+): { questions: ReturnType<typeof buildSelectionQuestions>; skills: string[]; servers: string[] } | undefined {
+	const policy = state.config.reflex;
+	if (!policy.enabled || policy.selectSkills === false) return undefined;
+	if (prompt.length < 12) return undefined;
+	const skills = shortlist(allSkills.map((sk) => ({ ...sk, text: sk.description })), prompt);
+	const servers = shortlist(
+		Object.entries(loadMcpConfig().servers)
+			.filter(([, sv]) => sv.enabled !== false)
+			.map(([name, sv]) => ({ name, hint: sv.command ? [sv.command, ...(sv.args ?? [])].join(" ") : (sv.url ?? ""), text: name })),
+		prompt,
+	);
+	if (skills.length + servers.length === 0) return undefined;
 
-		const skillCriteria: Record<string, string> = { none: "No skill is needed; the request is ordinary coding or conversation." };
-		for (const sk of skills) skillCriteria[sk.name] = clip(sk.description ?? sk.name, 300);
-		const serverCriteria: Record<string, string> = { none: "No external connector is needed; local files and the shell suffice." };
-		for (const sv of servers) serverCriteria[sv.name] = `Connector "${sv.name}" (${clip(sv.hint, 120)})`;
+	const skillCriteria: Record<string, string> = { none: "No skill is needed; the request is ordinary coding or conversation." };
+	for (const sk of skills) skillCriteria[sk.name] = clip(sk.description ?? sk.name, 300);
+	const serverCriteria: Record<string, string> = { none: "No external connector is needed; local files and the shell suffice." };
+	for (const sv of servers) serverCriteria[sv.name] = `Connector "${sv.name}" (${clip(sv.hint, 120)})`;
 
-		const questions: Record<string, ReturnType<typeof choice>> = {};
-		if (skills.length) questions.skill = choice({ question: "Which skill's instructions would most help carry out request? Pick none when ordinary knowledge suffices.", inspect: ["request", "recent_context"] }, skillCriteria);
-		if (servers.length) questions.connector = choice({ question: "Which external connector (MCP server) does request need? Pick none when local files and the shell are enough.", inspect: "request" }, serverCriteria);
-		try {
-			const res = await state.client.systemOne({ purpose: "select", state: { request: clip(prompt, 1500), recent_context: clip(ctx.getSystemPrompt().slice(-400), 400) }, questions, timeoutMs: 2500 });
-			const skillAns = res.answers.skill;
-			const connAns = res.answers.connector;
-			const hints = hintsFrom(
-				{
-					skill: skillAns as ChoiceAnswer | undefined,
-					connector: connAns as ChoiceAnswer | undefined,
-				},
-				skills.map((sk) => sk.name),
-				servers.map((server) => server.name),
-			);
-			state.record("select", hints.length ? hints.join(" · ") : `none relevant (skill ${skillAns ? `${skillAns.choice} ${pct(skillAns.confidence)}` : "-"}, connector ${connAns ? `${connAns.choice} ${pct(connAns.confidence)}` : "-"})`);
-			if (!hints.length) return undefined;
-			return { message: { customType: "reflex-relevance", content: `<relevance source="typesafe-jev">Likely relevant for this request: ${hints.join("; ")}.</relevance>`, display: true } };
-		} catch (err) {
-			state.degradedReason = err instanceof Error ? err.message : String(err);
-			return undefined;
-		}
-	});
+	const questions = buildSelectionQuestions(skills.length ? skillCriteria : {}, servers.length ? serverCriteria : {});
+	return { questions, skills: skills.map((sk) => sk.name), servers: servers.map((sv) => sv.name) };
+}
 
+/** The relevance line for the answers to those questions, and the record of what was picked. */
+export function applySelection(
+	state: ReflexState,
+	answers: { skill?: ChoiceAnswer; connector?: ChoiceAnswer },
+	rosters: { skills: string[]; servers: string[] },
+): string | undefined {
+	const hints = hintsFrom(answers, rosters.skills, rosters.servers);
+	state.record("select", hints.length ? hints.join(" · ") : `none relevant (skill ${answers.skill ? `${answers.skill.choice} ${pct(answers.skill.confidence)}` : "-"}, connector ${answers.connector ? `${answers.connector.choice} ${pct(answers.connector.confidence)}` : "-"})`);
+	return hints.length ? `<relevance source="typesafe-jev">Likely relevant for this request: ${hints.join("; ")}.</relevance>` : undefined;
+}
+
+export function registerSelectorRenderer(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer("reflex-relevance", (message, _o, theme) => {
 		const content = typeof message.content === "string" ? message.content : "";
 		return new Text(`${theme.fg("accent", "⚡ relevance ")}${theme.fg("muted", content.replace(/<\/?relevance[^>]*>/g, ""))}`, 0, 0);
