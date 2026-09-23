@@ -773,7 +773,10 @@
   }
   .mflags { text-align: right; font-size: 10px; }
   .dialog .opts button { padding: 6px 10px; }
-  .fs-path { margin-top: 8px; } .fs-path input { width: 100%; font: inherit; padding: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+  .fs-path { margin-top: 8px; display: flex; gap: 6px; } .fs-path input { flex: 1; min-width: 0; font: inherit; padding: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+  .fs-mk { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .fs-mk input { flex: 1; min-width: 120px; font: inherit; padding: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+  .fs-mk-err { flex-basis: 100%; color: #c0392b; font-size: 12px; }
   .kbd { border: 1px solid var(--gray); padding: 0 4px; font-size: 11px; }
   @media (max-width: 760px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } #side { max-height: 30vh; } }
 </style>
@@ -931,6 +934,24 @@ async function newSession() {
   await startIn(cwd);
 }
 /** Folder browser: recent projects, then navigate directories; no typing required. */
+/** "+ new folder" in the picker: a name field under the path, then browse into what it made. */
+function newFolder(parent, show) {
+  const row = $("#dBody").querySelector(".fs-path");
+  if (row.querySelector("#fsMkName")) return row.querySelector("#fsMkName").focus();
+  const mk = document.createElement("div"); mk.className = "fs-mk";
+  mk.innerHTML = `<input id="fsMkName" placeholder="folder name" spellcheck="false" autocomplete="off"><button class="b small primary" id="fsMkOk">create</button><button class="b small" id="fsMkNo">cancel</button>`;
+  row.after(mk);
+  const name = mk.querySelector("#fsMkName"); name.focus(); mk.scrollIntoView({ block: "nearest" });
+  const close = () => mk.remove();
+  const create = async () => {
+    const n = name.value.trim(); if (!n) return name.focus();
+    try { const r = await api("/api/fs/mkdir", { method: "POST", body: JSON.stringify({ parent, name: n }), headers: { "Content-Type": "application/json" } }); close(); await show(r.path); }
+    catch (e) { const old = mk.querySelector(".fs-mk-err"); if (old) old.remove(); mk.insertAdjacentHTML("beforeend", `<span class="fs-mk-err">${esc(e.message)}</span>`); mk.scrollIntoView({ block: "nearest" }); name.focus(); }
+  };
+  mk.querySelector("#fsMkOk").onclick = create;
+  mk.querySelector("#fsMkNo").onclick = close;
+  name.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") create(); if (e.key === "Escape") { e.preventDefault(); close(); } };
+}
 function pickFolder(title) {
   return new Promise(async resolve => {
     const o = $("#overlay"); o.classList.add("show");
@@ -949,10 +970,11 @@ function pickFolder(title) {
         <div class="fs-h">Browse</div>
         <div class="fs-crumbs"><a href="#" data-p="/">/</a>${crumbs.join('<span class="sep">/</span>')}${d.git ? ' <span class="git">git</span>' : ""}</div>
         <div class="fs-list">${d.parent ? `<div class="fs-item" data-p="${esc(d.parent)}"><span>↑</span><span>..</span></div>` : ""}${d.dirs.map(x => `<div class="fs-item" data-p="${esc(x.path)}"><span>▸</span><span>${esc(x.name)}</span>${x.git ? '<span class="git">git</span>' : ""}</div>`).join("") || '<div class="fs-empty">no subfolders</div>'}</div>
-        <div class="fs-path"><input id="fsPath" value="${esc(d.path)}" spellcheck="false"></div>`;
+        <div class="fs-path"><input id="fsPath" value="${esc(d.path)}" spellcheck="false"><button class="b small" id="fsNew" title="Create a folder inside this one">+ new folder</button></div>`;
       body.querySelectorAll("[data-p]").forEach(el => el.onclick = e => { e.preventDefault(); show(el.dataset.p); });
       body.querySelectorAll("[data-use]").forEach(el => el.onclick = () => done(el.dataset.use));
       const inp = body.querySelector("#fsPath"); inp.onkeydown = e => { if (e.key === "Enter") show(inp.value.trim()); if (e.key === "Escape") done(null); };
+      body.querySelector("#fsNew").onclick = () => newFolder(d.path, show);
       use.textContent = `Use ${d.path.replace(d.home, "~")}`;
     }
     const use = document.createElement("button"); use.className = "b primary"; use.onclick = () => done(cur);
