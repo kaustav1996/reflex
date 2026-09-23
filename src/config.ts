@@ -127,7 +127,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		classifyVoice: true,
 		protectedPaths: [".env", "**/.env*", "**/*.pem", "**/id_rsa*", "~/.ssh/**", "~/.aws/**"],
 		routing: {},
-		model: "jev-latest",
+		model: "jev-1.13.0",
 		timeoutMs: 4000,
 		verbose: true,
 		selectSkills: true,

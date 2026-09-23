@@ -72,6 +72,12 @@ and lists `~typesafe/jev-latest` and `typesafe/jev-1.13`; it takes the same requ
 same answers, and reports the cost of each call. Model ids differ between the two, so Reflex
 remembers your model for each provider. Pick both in onboarding, in Settings → Reflex layer, or
 with `/reflex provider` and `/reflex model`, which read the model list live from the provider.
+The default is a **pinned version** (`jev-1.13.0`, or `typesafe/jev-1.13` on OpenRouter), not a
+moving alias: thresholds hold for the model they were measured on, and `jev-latest` changes
+underneath them. Both providers accept the pinned id even though their lists only advertise the
+alias. You can still pick `jev-latest`, and Reflex says so wherever the model is shown. Every call
+is logged with the version that answered and a hash of the question's wording, so a model change
+or a reworded question is visible in the data.
 Reflex never switches provider on its own: if the one you chose has no key, the reflex layer
 reports that instead of falling back.
 

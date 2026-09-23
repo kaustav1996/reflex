@@ -2,7 +2,7 @@
  * Where Jev is reached, and which Jev model is used there. Both are the user's choice:
  *
  *   reflex.provider   "typesafe" | "openrouter"
- *   reflex.models     { typesafe: "jev-latest", openrouter: "~typesafe/jev-latest" }
+ *   reflex.models     { typesafe: "jev-1.13.0", openrouter: "typesafe/jev-1.13" }  (pinned by default)
  *
  *   typesafe    POST https://api.typesafe.ai/v1/systemone     Bearer TYPESAFE_API_KEY
  *               models: GET https://api.typesafe.ai/v1/models          (jev-latest, jev-preview …)
@@ -29,11 +29,23 @@ export const JEV_BASE_URL: Record<JevProvider, string> = {
 };
 export const JEV_KEY_ENV: Record<JevProvider, string> = { typesafe: "TYPESAFE_API_KEY", openrouter: "OPENROUTER_API_KEY" };
 export const JEV_LABEL: Record<JevProvider, string> = { typesafe: "TypeSafe (direct)", openrouter: "OpenRouter" };
-export const DEFAULT_JEV_MODEL: Record<JevProvider, string> = { typesafe: "jev-latest", openrouter: "~typesafe/jev-latest" };
+/**
+ * The default is a pinned version, not a moving alias: thresholds are measured against one model,
+ * and `jev-latest` changes underneath them. Both providers accept these ids even though their model
+ * lists only advertise the aliases (TypeSafe answers `jev-latest` with `jev-1.13.0`).
+ * Choosing an alias stays possible, and `unpinnedJevModel` says so wherever the model is shown.
+ */
+export const DEFAULT_JEV_MODEL: Record<JevProvider, string> = { typesafe: "jev-1.13.0", openrouter: "typesafe/jev-1.13" };
+/** The moving aliases, for the picker and for anyone who opts in. */
+export const LATEST_JEV_MODEL: Record<JevProvider, string> = { typesafe: "jev-latest", openrouter: "~typesafe/jev-latest" };
+/** True for a model id that can change underneath us (an alias rather than a version). */
+export function unpinnedJevModel(model: string): boolean {
+	return /latest|preview/.test(model);
+}
 /** Shown when the live list cannot be fetched. */
 export const FALLBACK_JEV_MODELS: Record<JevProvider, JevModel[]> = {
-	typesafe: [{ id: "jev-latest", description: "The latest iteration of TypeSafe's System One model" }, { id: "jev-preview", description: "A preview version of jev-latest" }],
-	openrouter: [{ id: "~typesafe/jev-latest", description: "Always the latest model in the Jev family" }, { id: "typesafe/jev-1.13", description: "Jev 1.13" }],
+	typesafe: [{ id: "jev-1.13.0", description: "Jev 1.13.0 (pinned)" }, { id: "jev-latest", description: "The latest iteration of TypeSafe's System One model" }, { id: "jev-preview", description: "A preview version of jev-latest" }],
+	openrouter: [{ id: "typesafe/jev-1.13", description: "Jev 1.13" }, { id: "~typesafe/jev-latest", description: "Always the latest model in the Jev family" }],
 };
 
 export interface JevModel {
@@ -100,16 +112,24 @@ export function missingJevHint(config: ReflexConfig, keys: KeyResolver): string 
 		: `no ${JEV_KEY_ENV.typesafe} or ${JEV_KEY_ENV.openrouter} found; either one reaches Jev.`;
 }
 
+/** The pinned default first, even when the provider's list only advertises aliases (TypeSafe does). */
+function withPinned(provider: JevProvider, models: JevModel[]): JevModel[] {
+	const pinned = DEFAULT_JEV_MODEL[provider];
+	if (models.some((m) => m.id === pinned)) return models;
+	return [{ id: pinned, description: `${pinned} (pinned — Reflex's default)`, inputPerMillion: models[0]?.inputPerMillion }, ...models];
+}
+
 /** Live list of the Jev models a provider offers; falls back to the known ids when the list cannot be fetched. */
 export async function listJevModels(provider: JevProvider, key: string | undefined, fetchImpl: typeof fetch = fetch): Promise<{ models: JevModel[]; live: boolean }> {
+	const out = (models: JevModel[], live: boolean) => ({ models: withPinned(provider, models), live });
 	try {
 		if (provider === "typesafe") {
-			if (!key) return { models: FALLBACK_JEV_MODELS.typesafe, live: false };
+			if (!key) return out(FALLBACK_JEV_MODELS.typesafe, false);
 			const res = await fetchImpl(`${JEV_BASE_URL.typesafe}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(6000) });
 			if (!res.ok) throw new Error(String(res.status));
 			const data = (await res.json()) as { models?: Array<{ name: string; description?: string }> };
 			const models = (data.models ?? []).map((m) => ({ id: m.name, description: m.description }));
-			return models.length ? { models, live: true } : { models: FALLBACK_JEV_MODELS.typesafe, live: false };
+			return models.length ? out(models, true) : out(FALLBACK_JEV_MODELS.typesafe, false);
 		}
 		const res = await fetchImpl(`${JEV_BASE_URL.openrouter}/models?output_modalities=decisions`, { signal: AbortSignal.timeout(6000) });
 		if (!res.ok) throw new Error(String(res.status));
@@ -117,8 +137,8 @@ export async function listJevModels(provider: JevProvider, key: string | undefin
 		const models = (data.data ?? [])
 			.filter((m) => m.id.replace(/^~/, "").startsWith("typesafe/"))
 			.map((m) => ({ id: m.id, description: m.name ?? m.description, inputPerMillion: m.pricing?.prompt ? Number(m.pricing.prompt) * 1e6 : undefined }));
-		return models.length ? { models, live: true } : { models: FALLBACK_JEV_MODELS.openrouter, live: false };
+		return models.length ? out(models, true) : out(FALLBACK_JEV_MODELS.openrouter, false);
 	} catch {
-		return { models: FALLBACK_JEV_MODELS[provider], live: false };
+		return out(FALLBACK_JEV_MODELS[provider], false);
 	}
 }

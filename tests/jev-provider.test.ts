@@ -23,9 +23,9 @@ test("the model is remembered per provider, because ids differ between providers
 	const c = cfg({ provider: "openrouter", models: { typesafe: "jev-preview", openrouter: "typesafe/jev-1.13" } });
 	assert.equal(jevModelFor(c, "typesafe"), "jev-preview");
 	assert.equal(resolveJevRoute(c, both)?.model, "typesafe/jev-1.13");
-	assert.equal(jevModelFor(cfg({}), "openrouter"), "~typesafe/jev-latest");
+	assert.equal(jevModelFor(cfg({}), "openrouter"), "typesafe/jev-1.13", "the default is pinned, not the ~latest alias");
 	assert.equal(jevModelFor(cfg({ model: "jev-1.13.0" }), "typesafe"), "jev-1.13.0"); // legacy shared field was a TypeSafe id
-	assert.equal(jevModelFor(cfg({ model: "jev-1.13.0" }), "openrouter"), "~typesafe/jev-latest");
+	assert.equal(jevModelFor(cfg({ model: "jev-1.13.0" }), "openrouter"), "typesafe/jev-1.13");
 });
 
 test("model lists come from each provider's own endpoint, with an offline fallback", async () => {
@@ -36,7 +36,8 @@ test("model lists come from each provider's own endpoint, with an offline fallba
 		return new Response(JSON.stringify({ data: [{ id: "~typesafe/jev-latest", name: "Jev Latest" }, { id: "typesafe/jev-1.13", pricing: { prompt: "0.000000042" } }, { id: "other/model" }] }), { status: 200 });
 	}) as unknown as typeof fetch;
 	const ts = await listJevModels("typesafe", "k", fetchImpl);
-	assert.deepEqual([ts.live, ts.models.map((m) => m.id)], [true, ["jev-latest", "jev-preview"]]);
+	// TypeSafe advertises only aliases, so the pinned default is added in front of its live list.
+	assert.deepEqual([ts.live, ts.models.map((m) => m.id)], [true, ["jev-1.13.0", "jev-latest", "jev-preview"]]);
 	const or = await listJevModels("openrouter", undefined, fetchImpl);
 	assert.deepEqual(or.models.map((m) => m.id), ["~typesafe/jev-latest", "typesafe/jev-1.13"]);
 	assert.ok(Math.abs((or.models[1].inputPerMillion ?? 0) - 0.042) < 1e-9);
