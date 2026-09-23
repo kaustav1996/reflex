@@ -505,6 +505,22 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				const parent = dirname(path);
 				return json(res, 200, { path, parent: parent === path ? null : parent, git: existsSync(join(path, ".git")), dirs, home: homedir() });
 			}
+			// New folder in the picker: one level, inside a folder that already exists.
+			if (url.pathname === "/api/fs/mkdir" && req.method === "POST") {
+				const body = JSON.parse((await readBody(req)).toString("utf8") || "{}") as { parent?: string; name?: string };
+				const name = (body.name ?? "").trim();
+				if (!name || name === "." || name === ".." || /[/\\\0]/.test(name) || name.length > 255) return json(res, 400, { error: "a folder name can't be empty or contain a slash" });
+				const parent = resolve((body.parent ?? homedir()).replace(/^~(?=$|\/)/, homedir()));
+				if (!existsSync(parent) || !statSync(parent).isDirectory()) return json(res, 404, { error: `not a directory: ${parent}` });
+				const path = join(parent, name);
+				if (existsSync(path)) return json(res, 409, { error: `${name} already exists here` });
+				try {
+					mkdirSync(path);
+				} catch (err) {
+					return json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				}
+				return json(res, 201, { path });
+			}
 			if (url.pathname === "/api/recent" && req.method === "GET") {
 				const seen = new Map<string, number>();
 				try {
@@ -598,6 +614,11 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			const am = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)(?:\/(run|runs|toggle))?$/);
 			if (am) {
 				const agent = loadAgent(am[1]);
+				// An agent whose agent.json won't parse can still be deleted: that is how you get rid of it.
+				if (!agent && !am[2] && req.method === "DELETE" && listBrokenAgents().some((b) => b.id === am[1])) {
+					deleteAgent(am[1]);
+					return json(res, 200, { ok: true });
+				}
 				if (!agent) return json(res, 404, { error: "no such agent" });
 				if (!am[2] && req.method === "GET") {
 					const diagram = agentDiagram(agent);
