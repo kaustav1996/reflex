@@ -1,7 +1,7 @@
 /**
  * Reflex layer extension entry: wires the gate, monitor, router and the /reflex command.
  */
-import { asProvider, JEV_LABEL, listJevModels, missingJevHint } from "./provider.js";
+import { asProvider, JEV_LABEL, listJevModels, missingJevHint, unpinnedJevModel } from "./provider.js";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { ReflexConfig, RiskAppetite } from "../../config.js";
@@ -96,7 +96,7 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 		case "": {
 			const lines = [
 				`${theme.bold("⚡ Reflex")} ${state.enabled ? theme.fg("success", "on") : theme.fg("error", "off")}${state.client ? "" : theme.fg("warning", " (no TypeSafe or OpenRouter key)")}`,
-				`jev: ${state.route ? `${theme.fg("accent", JEV_LABEL[state.route.provider])} · model ${theme.fg("accent", state.route.model)}${state.route.chosen ? "" : theme.fg("warning", "  (provider not chosen yet: /reflex provider typesafe|openrouter)")}` : theme.fg("warning", `unreachable: ${missingJevHint(state.config, state.keys)}`)}`,
+				`jev: ${state.route ? `${theme.fg("accent", JEV_LABEL[state.route.provider])} · model ${theme.fg("accent", state.route.model)}${unpinnedJevModel(state.route.model) ? theme.fg("warning", "  (not pinned: answers can change when a new Jev ships)") : ""}${state.route.chosen ? "" : theme.fg("warning", "  (provider not chosen yet: /reflex provider typesafe|openrouter)")}` : theme.fg("warning", `unreachable: ${missingJevHint(state.config, state.keys)}`)}`,
 				`appetite: ${theme.fg("accent", p.riskAppetite)}   gate: ${onOff(p.gateToolCalls)}   monitor: ${onOff(p.monitorProgress)}   route: ${onOff(p.routeModels)}   verbose: ${onOff(p.verbose)}`,
 				`timeout: ${p.timeoutMs}ms   protected: ${p.protectedPaths.length} patterns`,
 				`routing: ${(["fast", "default", "strong"] as const).map((t) => `${t}=${p.routing[t] ?? "-"}${p.routingEffort?.[t] ? `@${p.routingEffort[t]}` : ""}`).join("  ")}`,

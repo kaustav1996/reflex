@@ -8,11 +8,25 @@
  * All questions in one request are evaluated in parallel, so adding heads is ~free in latency.
  * Jev is text-only and returns typed answers with calibrated probabilities (no generation).
  */
+import { createHash } from "node:crypto";
 import { logCall } from "../../logs/calls.js";
 
+/**
+ * A short, stable fingerprint of what was asked: the question ids, their types and their wording
+ * (instructions and criteria), never the state. Two calls that ask the same thing about different
+ * situations share a hash, so a log can be grouped by question and a reworded question is visible
+ * as a new one — which is what makes a threshold measured on old data traceable.
+ */
+export function questionHash(questions: Record<string, { type: string; instructions?: unknown; criteria?: unknown }>): string {
+	const shape = Object.keys(questions)
+		.sort()
+		.map((id) => [id, questions[id].type, questions[id].instructions ?? "", questions[id].criteria ?? ""]);
+	return createHash("sha256").update(JSON.stringify(shape)).digest("hex").slice(0, 12);
+}
 
 export const TYPESAFE_BASE_URL = process.env.TYPESAFE_BASE_URL ?? "https://api.typesafe.ai/v1";
-export const DEFAULT_JEV_MODEL = "jev-latest";
+/** Fallback when no model is given. Pinned on purpose; see DEFAULT_JEV_MODEL in provider.ts. */
+export const DEFAULT_JEV_MODEL = "jev-1.13.0";
 
 export type Structured = string | Record<string, unknown> | unknown[];
 
@@ -181,7 +195,7 @@ export class TypesafeClient {
 					this.stats.outputTokens += json.usage.output_tokens ?? 0;
 					this.stats.costUsd += json.usage.cost ?? 0;
 				}
-				logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ms: latencyMs, summary: `${req.purpose ?? "call"} · ${Object.keys(req.questions).length} question${Object.keys(req.questions).length === 1 ? "" : "s"} · ${json.model}${this.provider === "openrouter" ? " via openrouter" : ""}${json.usage?.input_tokens ? ` · ${json.usage.input_tokens} tok` : ""}${json.usage?.cost ? ` · $${json.usage.cost.toFixed(6)}` : ""}`, detail: { provider: this.provider, state: req.state, questions: req.questions, answers: json.answers, usage: json.usage } });
+				logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ms: latencyMs, summary: `${req.purpose ?? "call"} · ${Object.keys(req.questions).length} question${Object.keys(req.questions).length === 1 ? "" : "s"} · ${json.model}${this.provider === "openrouter" ? " via openrouter" : ""}${json.usage?.input_tokens ? ` · ${json.usage.input_tokens} tok` : ""}${json.usage?.cost ? ` · $${json.usage.cost.toFixed(6)}` : ""}`, detail: { provider: this.provider, asked: body.model, model: json.model, qhash: questionHash(req.questions), state: req.state, questions: req.questions, answers: json.answers, usage: json.usage } });
 				return { ...json, latencyMs };
 			} catch (err) {
 				lastError = err;
@@ -198,7 +212,7 @@ export class TypesafeClient {
 			}
 		}
 		this.stats.failures++;
-		logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ok: false, ms: performance.now() - started, summary: `${req.purpose ?? "call"} failed${this.provider === "openrouter" ? " via openrouter" : ""}: ${lastError instanceof Error ? lastError.message : String(lastError)}`, detail: { provider: this.provider, state: req.state, questions: req.questions } });
+		logCall({ kind: "typesafe", source: req.purpose ?? "unknown", ok: false, ms: performance.now() - started, summary: `${req.purpose ?? "call"} failed${this.provider === "openrouter" ? " via openrouter" : ""}: ${lastError instanceof Error ? lastError.message : String(lastError)}`, detail: { provider: this.provider, asked: body.model, qhash: questionHash(req.questions), state: req.state, questions: req.questions } });
 		if (lastError instanceof TypesafeError) throw lastError;
 		throw new TypesafeError(lastError instanceof Error ? lastError.message : String(lastError));
 	}

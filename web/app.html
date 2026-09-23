@@ -2323,7 +2323,8 @@ async function wireJevChoice(jev) {
       const r = await api(`/api/jev/models?provider=${p}`); if (prov.value !== p) return;
       const current = jev.models[p]; const ids = r.models.map(m => m.id); if (current && !ids.includes(current)) r.models.unshift({ id: current, description: "saved" });
       model.innerHTML = r.models.map(m => `<option value="${esc(m.id)}" ${m.id === current ? "selected" : ""}>${esc(m.id)}${m.description ? " — " + esc(m.description) : ""}${m.inputPerMillion ? ` · $${m.inputPerMillion.toFixed(3)}/M in` : ""}</option>`).join("");
-      $("#jevModelHint").textContent = `${r.live ? "live list" : "offline list"} from ${jev.labels[p]} · models differ per provider and are remembered separately`;
+      const showHint = () => { const unpinned = /latest|preview/.test(model.value); $("#jevModelHint").innerHTML = `${r.live ? "live list" : "offline list"} from ${esc(jev.labels[p])} · models differ per provider and are remembered separately${unpinned ? ` · <b>${esc(model.value)} is an alias</b>: answers can change when TypeSafe ships a new Jev, and thresholds measured on the old one no longer hold. Pick a version to pin it.` : " · pinned to a version"}`; };
+      showHint(); model.addEventListener("change", showHint);
     } catch (e) { $("#jevModelHint").textContent = "could not load models: " + e.message; }
   };
   const keyVis = () => { const direct = prov.value === "typesafe"; $("#jevKeyLabel").style.display = direct ? "" : "none"; $("#jevKeyCell").style.display = direct ? "" : "none"; };
