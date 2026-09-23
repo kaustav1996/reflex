@@ -1003,6 +1003,12 @@ function selectSession(id) {
 function rpc(cmd) { if (!state.current || state.current.startsWith("term:")) return; return api(`/api/sessions/${state.current.slice(4)}/rpc`, { method: "POST", body: JSON.stringify(cmd), headers: { "Content-Type": "application/json" } }).catch(e => notice("error", e.message)); }
 
 // Session-file entries (terminal mirror) → the same view items as live RPC events.
+/** A custom message the model is meant to read, shown as a line: never as its raw markup. */
+function customLine(m) {
+  const raw = contentText(m.content);
+  const rel = raw.match(/<relevance[^>]*>([\s\S]*?)<\/relevance>/);
+  return rel ? `relevance · ${rel[1].trim()}` : raw.replace(/<\/?[a-z-]+(?:\s[^>]*)?>/gi, "").trim() || raw;
+}
 function handleEntry(v, entry) {
   if (entry.type === "message" && entry.message) {
     const m = entry.message;
@@ -1012,7 +1018,7 @@ function handleEntry(v, entry) {
       if (text) v.items.push({ kind: "assistant", text });
       for (const c of (m.content || [])) if (c.type === "toolCall") { const t = { kind: "tool", id: c.id, name: c.name, args: c.arguments, status: "run", out: "" }; v.byTool[c.id] = t; v.items.push(t); }
     } else if (m.role === "toolResult") { const t = v.byTool[m.toolCallId]; if (t) { t.status = m.isError ? "err" : "ok"; t.out = resultText(m); t.images = (m.content || []).filter(c => c.type === "image"); } }
-    else if (m.role === "custom" && m.display) v.items.push({ kind: "reflex", text: contentText(m.content) });
+    else if (m.role === "custom" && m.display) v.items.push({ kind: "reflex", text: customLine(m) });
   } else if (entry.type === "custom" && entry.customType === "reflex-decision" && entry.data) v.items.push({ kind: "reflex", text: entry.data.summary });
   else if (entry.type === "session" && entry.cwd) v.title = entry.cwd;
 }

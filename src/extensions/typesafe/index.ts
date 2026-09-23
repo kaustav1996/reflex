@@ -9,7 +9,8 @@ import { noul } from "./client.js";
 import { registerGate, updateStatus } from "./gate.js";
 import { registerMonitor } from "./monitor.js";
 import { registerRouter, effectiveRouting, routeStatus } from "./router.js";
-import { registerSelector } from "./selector.js";
+import { registerSelectorRenderer } from "./selector.js";
+import { registerRequestBrief } from "./brief.js";
 import { ReflexState } from "./state.js";
 
 export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI) => ReflexState {
@@ -52,7 +53,9 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		registerGate(pi, state);
 		registerMonitor(pi, state);
 		registerRouter(pi, state);
-		registerSelector(pi, state);
+		registerSelectorRenderer(pi);
+		// Routing and relevance are one call: same request, same state, questions in parallel.
+		registerRequestBrief(pi, state);
 
 		pi.on("session_start", async (_e, ctx) => {
 			applyFlag();
