@@ -777,6 +777,9 @@
   .fs-mk { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .fs-mk input { flex: 1; min-width: 120px; font: inherit; padding: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
   .fs-mk-err { flex-basis: 100%; color: #c0392b; font-size: 12px; }
+  #toasts { position: fixed; top: 12px; right: 12px; z-index: 60; display: flex; flex-direction: column; gap: 6px; max-width: min(420px, 90vw); }
+  .toast { background: var(--paper); color: var(--ink); border: 1px solid var(--line); box-shadow: 3px 3px 0 var(--line); padding: 8px 10px; font-size: 12px; cursor: pointer; }
+  .toast.error { border-color: #c0392b; color: #c0392b; } .toast.warning { border-color: var(--magenta); }
   .kbd { border: 1px solid var(--gray); padding: 0 4px; font-size: 11px; }
   @media (max-width: 760px) { #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } #side { max-height: 30vh; } }
 </style>
@@ -1146,7 +1149,21 @@ function llmErrorText(m) {
   const status = (raw.match(/^\s*(\d{3})\b/) || [])[1];
   return `${m.provider || "provider"}/${m.model || "model"} did not answer${status ? ` (HTTP ${status})` : ""}: ${msg}`;
 }
-function notice(type, text) { const id = state.current; if (!id) return; view(id).items.push({ kind: "notice", text, type }); const chat = $("#chat"); const d = document.createElement("div"); d.className = `notice ${type}`; d.textContent = text; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; setTimeout(() => d.remove(), 12000); }
+/** A message that doesn't belong to a session's chat: a strip at the top right, click to dismiss. */
+function toast(type, text) {
+  let box = $("#toasts");
+  if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.appendChild(box); }
+  const d = document.createElement("div"); d.className = `toast ${type}`; d.textContent = text;
+  d.onclick = () => d.remove(); box.appendChild(d);
+  setTimeout(() => d.remove(), type === "error" ? 12000 : 6000);
+}
+function notice(type, text) {
+  const id = state.current;
+  // Notices live in a session's chat. On the Agents, Artifacts or Settings tabs (often with no
+  // session at all) they would vanish, so say it in a dialog instead of swallowing it.
+  if (!id || state.tab !== "sessions") return toast(type, text);
+  view(id).items.push({ kind: "notice", text, type }); const chat = $("#chat"); const d = document.createElement("div"); d.className = `notice ${type}`; d.textContent = text; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; setTimeout(() => d.remove(), 12000);
+}
 
 // ── dialogs (extension UI: reflex gate, browse confirm, …) ───────────────
 function showDialog(ev) {
@@ -1542,9 +1559,17 @@ function openBrokenAgent(id) {
     <div class="hint">Its definition file isn't valid JSON, so the agent doesn't run and can't be opened here. This usually happens when a session edits <code>agent.json</code> by hand and a quote or an HTML entity breaks the escaping.</div>
     <div class="conn-meta"><div><div class="k">File</div><div class="v"><code>${esc(b.file)}</code></div></div><div><div class="k">Error</div><div class="v">${esc(b.error)}</div></div>${b.line ? `<div><div class="k">Where</div><div class="v">line ${b.line}, column ${b.column}</div></div>` : ""}</div>
     ${b.snippet ? `<h3 style="margin:12px 0 4px">Near the error</h3><pre class="out">${esc(b.snippet)}</pre>` : ""}
-    <div class="rowbtns"><button class="b primary" id="brokenCopy">copy a fix request for a session</button><button class="b" id="brokenReload">check again</button></div>
+    <div class="rowbtns"><button class="b primary" id="brokenCopy">copy a fix request for a session</button><button class="b" id="brokenReload">check again</button><button class="b small danger" id="brokenDelete">delete</button></div>
     <div class="hint">Paste the request into the session that built the agent (or any Reflex session). Runs and settings come back once the file parses.</div></div>`;
   $("#brokenCopy").onclick = () => copyText(fix);
+  $("#brokenDelete").onclick = async () => {
+    const typed = await askText(`Delete agent "${id}"?`, `type ${id} to confirm`, "");
+    if (typed === null) return;
+    if (typed.trim() !== id) return notice("error", `not deleted: type the agent's id, ${id}`);
+    try { await api(`/api/agents/${id}`, { method: "DELETE" }); }
+    catch (e) { return notice("error", "delete failed: " + e.message); }
+    state.brokenView = null; await refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; notice("info", `deleted ${id}`);
+  };
   $("#brokenReload").onclick = async () => { await refreshAgents(); if (state.agents.some(a => a.id === id)) { state.brokenView = null; openAgent(id); } else if ((state.brokenAgents || []).some(x => x.id === id)) { openBrokenAgent(id); notice("warning", "still not valid JSON"); } };
   refreshAgents();
 }
@@ -1745,7 +1770,15 @@ function renderAgent(runId) {
   $("#aMermaid").onclick = () => copyText(state.agentMermaid || "");
   $("#aEdit").onclick = () => { state.editing = true; renderAgent(); };
   $("#aToggle").onclick = async () => { await api(`/api/agents/${a.id}/toggle`, { method: "POST" }); openAgent(a.id); };
-  $("#aDelete").onclick = async () => { const ok = await askText(`Delete agent "${a.name}"?`, "type the agent id to confirm", ""); if (ok !== a.id) return; const kids = (state.agentChildren || []).length && await chooseDialog(`Also delete its ${state.agentChildren.length} helper agent(s)?`, `<p>${state.agentChildren.map(c => esc(c.name)).join(", ")}</p>`, [{ label: "Delete helpers too", value: true, primary: true }, { label: "Keep helpers", value: false }]); await api(`/api/agents/${a.id}${kids ? "?children=1" : ""}`, { method: "DELETE" }); state.agent = null; refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; };
+  $("#aDelete").onclick = async () => {
+    const typed = await askText(`Delete agent "${a.name}"?`, `type ${a.id} to confirm`, "");
+    if (typed === null) return;
+    if (typed.trim() !== a.id) return notice("error", `not deleted: type the agent's id, ${a.id}`);
+    const kids = (state.agentChildren || []).length && await chooseDialog(`Also delete its ${state.agentChildren.length} helper agent(s)?`, `<p>${state.agentChildren.map(c => esc(c.name)).join(", ")}</p>`, [{ label: "Delete helpers too", value: true, primary: true }, { label: "Keep helpers", value: false }]);
+    try { await api(`/api/agents/${a.id}${kids ? "?children=1" : ""}`, { method: "DELETE" }); }
+    catch (e) { return notice("error", "delete failed: " + e.message); }
+    state.agent = null; refreshAgents(); $("#agentPane").innerHTML = `<div class="empty">deleted</div>`; notice("info", `deleted ${a.id}`);
+  };
   pane.querySelectorAll("[data-resume]").forEach(b => b.onclick = async (e) => { e.stopPropagation(); b.disabled = true; try { const r = await api(`/api/agents/${a.id}/runs/${b.dataset.resume}/resume`, { method: "POST" }); notice("info", `resuming after: ${(r.from || []).join(", ") || "start"}`); await openAgent(a.id, b.dataset.resume); } catch (err) { notice("error", err.message); b.disabled = false; } });
   pane.querySelectorAll(".run").forEach(el => el.onclick = () => { if (state.openRunId === el.dataset.run) closeRun(); else openRun(a.id, el.dataset.run); });
   const minBtn = $("#runMin"); if (minBtn) minBtn.onclick = closeRun;

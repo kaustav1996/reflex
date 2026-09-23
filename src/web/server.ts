@@ -614,6 +614,11 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 			const am = url.pathname.match(/^\/api\/agents\/([a-z0-9-]+)(?:\/(run|runs|toggle))?$/);
 			if (am) {
 				const agent = loadAgent(am[1]);
+				// An agent whose agent.json won't parse can still be deleted: that is how you get rid of it.
+				if (!agent && !am[2] && req.method === "DELETE" && listBrokenAgents().some((b) => b.id === am[1])) {
+					deleteAgent(am[1]);
+					return json(res, 200, { ok: true });
+				}
 				if (!agent) return json(res, 404, { error: "no such agent" });
 				if (!am[2] && req.method === "GET") {
 					const diagram = agentDiagram(agent);
