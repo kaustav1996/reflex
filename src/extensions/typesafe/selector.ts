@@ -6,14 +6,15 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { choice, isValidChoice, type ChoiceAnswer } from "./client.js";
+import { isValidChoice, type ChoiceAnswer } from "./client.js";
+import { buildSelectionQuestions, MAX_CHOICE_OPTIONS, MIN_HINT_PROBABILITY } from "./policy.js";
 import { clip } from "./context.js";
 import type { ReflexState } from "./state.js";
 import { loadMcpConfig } from "../mcp/client.js";
 
-export const MIN_HINT_PROBABILITY = 0.5;
-/** Options offered in one Jev Choice. Jev accepts up to 255; "none" takes one slot. */
-export const MAX_CHOICE_OPTIONS = 250;
+// The numbers and the question wording live with the gate's, in policy.ts; re-exported so the
+// selector's callers and tests keep one import.
+export { MAX_CHOICE_OPTIONS, MIN_HINT_PROBABILITY } from "./policy.js";
 
 const STOP = new Set(["the", "and", "for", "with", "that", "this", "from", "into", "your", "you", "are", "can", "use", "when", "what", "how", "please", "need", "want", "make", "help"]);
 const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w)));
@@ -66,7 +67,7 @@ export function selectionQuestions(
 	state: ReflexState,
 	prompt: string,
 	allSkills: Array<{ name: string; description?: string }>,
-): { questions: Record<string, ReturnType<typeof choice>>; skills: string[]; servers: string[] } | undefined {
+): { questions: ReturnType<typeof buildSelectionQuestions>; skills: string[]; servers: string[] } | undefined {
 	const policy = state.config.reflex;
 	if (!policy.enabled || policy.selectSkills === false) return undefined;
 	if (prompt.length < 12) return undefined;
@@ -84,9 +85,7 @@ export function selectionQuestions(
 	const serverCriteria: Record<string, string> = { none: "No external connector is needed; local files and the shell suffice." };
 	for (const sv of servers) serverCriteria[sv.name] = `Connector "${sv.name}" (${clip(sv.hint, 120)})`;
 
-	const questions: Record<string, ReturnType<typeof choice>> = {};
-	if (skills.length) questions.skill = choice({ question: "Which skill's instructions would most help carry out request? Pick none when ordinary knowledge suffices.", inspect: ["request", "recent_context"] }, skillCriteria);
-	if (servers.length) questions.connector = choice({ question: "Which external connector (MCP server) does request need? Pick none when local files and the shell are enough.", inspect: "request" }, serverCriteria);
+	const questions = buildSelectionQuestions(skills.length ? skillCriteria : {}, servers.length ? serverCriteria : {});
 	return { questions, skills: skills.map((sk) => sk.name), servers: servers.map((sv) => sv.name) };
 }
 

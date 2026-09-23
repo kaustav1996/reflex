@@ -11,7 +11,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { basename } from "node:path";
 import { type ChoiceAnswer, isValidChoice } from "./client.js";
 import { clip, snapshotSession } from "./context.js";
-import { buildRoutingQuestion, ROUTE_TIERS } from "./policy.js";
+import { buildRoutingQuestion, ROUTE_MIN_CONFIDENCE, ROUTE_TIERS } from "./policy.js";
 import type { ReflexState, RouteTier } from "./state.js";
 
 export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
@@ -68,7 +68,7 @@ export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, stat
 	state.router.decisions++;
 	state.router.byTier[answer.choice] = (state.router.byTier[answer.choice] ?? 0) + 1;
 	// Unsure means the default tier, never the tier the previous request happened to get.
-	const unsure = answer.confidence < 0.6;
+	const unsure = answer.confidence < ROUTE_MIN_CONFIDENCE;
 	const tier: RouteTier = unsure ? "default" : (answer.choice as RouteTier);
 	const target = tiers[tier] ?? tiers.default;
 	state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}%${unsure ? " (unsure → default)" : ""} → ${target ?? "(unchanged)"}`);

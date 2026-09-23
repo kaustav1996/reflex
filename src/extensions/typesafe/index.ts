@@ -11,6 +11,7 @@ import { registerMonitor } from "./monitor.js";
 import { registerRouter, effectiveRouting, routeStatus } from "./router.js";
 import { registerSelectorRenderer } from "./selector.js";
 import { registerRequestBrief } from "./brief.js";
+import { registerScreen } from "./screen.js";
 import { ReflexState } from "./state.js";
 
 export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI) => ReflexState {
@@ -56,6 +57,8 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		registerSelectorRenderer(pi);
 		// Routing and relevance are one call: same request, same state, questions in parallel.
 		registerRequestBrief(pi, state);
+		// Pages, tickets and connector output are data someone else wrote: screen them for instructions.
+		registerScreen(pi, state);
 
 		pi.on("session_start", async (_e, ctx) => {
 			applyFlag();

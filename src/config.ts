@@ -84,6 +84,8 @@ export interface ReflexPolicyConfig {
 	verbose: boolean;
 	/** Before each prompt, let Jev pick the relevant skill and MCP connector and hint the model. */
 	selectSkills: boolean;
+	/** Screen results that came from outside this machine for instructions aimed at the agent. */
+	screenResults?: boolean;
 }
 
 export interface ReflexConfig {
@@ -131,6 +133,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		timeoutMs: 4000,
 		verbose: true,
 		selectSkills: true,
+		screenResults: true,
 	},
 	llm: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 	ui: { theme: "typesafe" },

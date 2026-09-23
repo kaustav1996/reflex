@@ -6,7 +6,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { snapshotSession } from "./context.js";
-import { buildCompletionQuestions, buildTurnMonitorQuestions, shouldNudgeContinue } from "./policy.js";
+import { buildCompletionQuestions, buildTurnMonitorQuestions, shouldNudgeContinue, MONITOR_THRESHOLDS } from "./policy.js";
 
 /** Continue-nudges allowed per message the user sends (so a model that keeps planning can't loop). */
 export const MAX_CONTINUE_NUDGES = 2;
@@ -60,7 +60,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 				const { looping, error_ignored, stuck } = res.answers;
 				state.record("monitor", `turn ${event.turnIndex}: loop ${pct(looping.noul)} · error-ignored ${pct(error_ignored.noul)} · stuck ${pct(stuck.noul)}`);
 
-				consecutiveLoopSignals = looping.noul >= 0.7 ? consecutiveLoopSignals + 1 : 0;
+				consecutiveLoopSignals = looping.noul >= MONITOR_THRESHOLDS.looping ? consecutiveLoopSignals + 1 : 0;
 				const canNudge = event.turnIndex - lastNudgeTurn >= 3;
 
 				if (consecutiveLoopSignals >= 2 && canNudge) {
@@ -69,13 +69,13 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 					nudge(pi, ctx, `Reflex (System One check, ${pct(looping.noul)} looping): you appear to be repeating the same actions without new results. Stop, state what you have learned, and either change approach or ask the user.`);
 					return;
 				}
-				if (error_ignored.noul >= 0.8 && canNudge) {
+				if (error_ignored.noul >= MONITOR_THRESHOLDS.errorIgnored && canNudge) {
 					lastNudgeTurn = event.turnIndex;
 					state.monitor.errorNudges++;
 					nudge(pi, ctx, `Reflex (${pct(error_ignored.noul)}): the last tool result contained an error you did not address. Read it and handle it before continuing.`);
 					return;
 				}
-				if (stuck.noul >= 0.85 && turnsWithTools >= 6 && canNudge) {
+				if (stuck.noul >= MONITOR_THRESHOLDS.stuck && turnsWithTools >= MONITOR_THRESHOLDS.stuckAfterTurns && canNudge) {
 					lastNudgeTurn = event.turnIndex;
 					if (ctx.hasUI) ctx.ui.notify(`⚡ Reflex: agent looks stuck (${pct(stuck.noul)}). Press Esc to interrupt or let it continue.`, "warning");
 				}
@@ -106,14 +106,14 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 			state.monitor.checks++;
 			const { claims_done, verified, scope_drift, needs_user, stopped_midway } = res.answers;
 			state.record("completion", `done ${pct(claims_done.noul)} · verified ${pct(verified.noul)} · drift ${pct(scope_drift.noul)} · needs-user ${pct(needs_user.noul)} · stopped-midway ${pct(stopped_midway.noul)}`);
-			if (needs_user.noul >= 0.7) return;
+			if (needs_user.noul >= MONITOR_THRESHOLDS.needsUser) return;
 			if (shouldNudgeContinue({ claims_done: claims_done.noul, needs_user: needs_user.noul, stopped_midway: stopped_midway.noul }) && continueNudges < MAX_CONTINUE_NUDGES) {
 				continueNudges++;
 				state.monitor.continueNudges++;
 				nudge(pi, ctx, `Reflex (System One check): you described the next steps but ended the turn without doing them (${pct(stopped_midway.noul)}). Carry them out now with tools; don't repeat the plan. If something blocks you, say what it is.`, "followUp");
 				return;
 			}
-			if (claims_done.noul >= 0.7 && verified.noul <= 0.35) {
+			if (claims_done.noul >= MONITOR_THRESHOLDS.claimsDone && verified.noul <= MONITOR_THRESHOLDS.verified) {
 				nudgedVerifyForPrompt = true;
 				state.monitor.verifyNudges++;
 				if (policy.riskAppetite === "bold") {
@@ -122,7 +122,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 					nudge(pi, ctx, `Reflex (System One check): you reported the task as done, but no verification ran after the last change (verified ${pct(verified.noul)}). Run the relevant tests, build, or command now and report the actual output. If verification is impossible, say so explicitly.`, "followUp");
 				}
 			}
-			if (scope_drift.noul >= 0.75 && ctx.hasUI) {
+			if (scope_drift.noul >= MONITOR_THRESHOLDS.scopeDrift && ctx.hasUI) {
 				state.monitor.driftWarnings++;
 				ctx.ui.notify(`⚡ Reflex: changes may go beyond what you asked (${pct(scope_drift.noul)}). Check the diff.`, "info");
 			}

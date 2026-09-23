@@ -54,6 +54,8 @@ export class ReflexState {
 	keys: KeyResolver;
 	readonly gate: GateStats = { allowed: 0, asked: 0, userAllowed: 0, userDenied: 0, blocked: 0, degraded: 0, skipped: 0 };
 	readonly monitor: MonitorStats = { checks: 0, loopNudges: 0, errorNudges: 0, verifyNudges: 0, driftWarnings: 0, continueNudges: 0 };
+	/** Results from outside this machine that were marked as carrying instructions. */
+	screened = 0;
 	readonly router: RouterStats = { decisions: 0, switches: 0, byTier: {} };
 	/**
 	 * Routing for this session only (never saved): a model the user picked, which pauses routing,
