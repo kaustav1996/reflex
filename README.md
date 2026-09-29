@@ -283,6 +283,27 @@ live tail. Before a line is written, known secrets are replaced by `[SECRET:NAME
 that looks like a credential by `[SECRET:#hash]`. The hash is stable, so one value always masks
 to the same tag.
 
+### Decision log
+
+The call log says what was asked and answered. `~/.reflex/logs/decisions.jsonl` says what was
+*decided*: for each gate, routing, relevance, monitor, completion and screening decision, the Jev
+version that answered, a hash of the question wording, every probability next to the threshold it
+was compared against, the primitive that produced it, and the action the code took. Quiet turns
+are recorded too, or there would be no base rate to compare against.
+
+Outcomes arrive later than decisions — a user answers an ask, a verification fails afterwards — so
+the file is append-only: an outcome is its own line naming the decision, and readers fold the two
+together. Today the gate records what you answered when it asked.
+
+```bash
+reflex decisions --limit 20            # every decision, its numbers and what came of it
+reflex decisions --source gate --with-outcome
+```
+
+A probability belongs to one question on one primitive, so each entry carries its primitive: a
+noul and a choice asking "the same" thing don't return comparable numbers, and a threshold must
+never be carried between them.
+
 ## Connectors, skills, packages
 
 Connectors are MCP servers. Reflex knows the official endpoint and sign-in method of the common

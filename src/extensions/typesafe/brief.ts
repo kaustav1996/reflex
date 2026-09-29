@@ -14,6 +14,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import type { ChoiceAnswer, Question } from "./client.js";
+import { questionHash } from "./client.js";
 import { clip, snapshotSession } from "./context.js";
 import { applyRouting, routingQuestion } from "./router.js";
 import { applySelection, selectionQuestions } from "./selector.js";
@@ -46,9 +47,10 @@ export function registerRequestBrief(pi: ExtensionAPI, state: ReflexState): void
 				timeoutMs: state.config.reflex.timeoutMs,
 			});
 			const answers = res.answers as Record<string, ChoiceAnswer | undefined>;
-			if (tier && answers.tier) await applyRouting(pi, ctx, state, answers.tier);
+			const log = { model: res.model, qhash: questionHash(questions as never) };
+			if (tier && answers.tier) await applyRouting(pi, ctx, state, answers.tier, log);
 			if (!selection) return undefined;
-			const relevance = applySelection(state, { skill: answers.skill, connector: answers.connector }, selection);
+			const relevance = applySelection(state, { skill: answers.skill, connector: answers.connector }, selection, log);
 			return relevance ? { message: { customType: "reflex-relevance", content: relevance, display: true } } : undefined;
 		} catch (err) {
 			state.degradedReason = err instanceof Error ? err.message : String(err);

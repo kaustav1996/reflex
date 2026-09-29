@@ -7,7 +7,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { isValidChoice, type ChoiceAnswer } from "./client.js";
-import { buildSelectionQuestions, MAX_CHOICE_OPTIONS, MIN_HINT_PROBABILITY } from "./policy.js";
+import { buildSelectionQuestions, confidenceBand, MAX_CHOICE_OPTIONS, MIN_HINT_PROBABILITY } from "./policy.js";
+import { logDecision } from "../../logs/decisions.js";
 import { clip } from "./context.js";
 import type { ReflexState } from "./state.js";
 import { loadMcpConfig } from "../mcp/client.js";
@@ -94,8 +95,20 @@ export function applySelection(
 	state: ReflexState,
 	answers: { skill?: ChoiceAnswer; connector?: ChoiceAnswer },
 	rosters: { skills: string[]; servers: string[] },
+	log: { model?: string; qhash?: string } = {},
 ): string | undefined {
 	const hints = hintsFrom(answers, rosters.skills, rosters.servers);
+	const signal = (a: ChoiceAnswer | undefined) => (a ? { primitive: "choice" as const, value: a.probabilities[a.choice] ?? a.confidence, pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, threshold: MIN_HINT_PROBABILITY } : undefined);
+	logDecision({
+		source: "select",
+		model: log.model,
+		qhash: log.qhash,
+		action: hints.length ? "hint" : "no-hint",
+		band: confidenceBand(Math.max(answers.skill?.confidence ?? 0, answers.connector?.confidence ?? 0)),
+		summary: hints.length ? hints.join(" · ") : `nothing relevant (${rosters.skills.length} skills, ${rosters.servers.length} connectors offered)`,
+		signals: Object.fromEntries(Object.entries({ skill: signal(answers.skill), connector: signal(answers.connector) }).filter(([, v]) => !!v) as Array<[string, NonNullable<ReturnType<typeof signal>>]>),
+		detail: { offered: { skills: rosters.skills.length, connectors: rosters.servers.length } },
+	});
 	state.record("select", hints.length ? hints.join(" · ") : `none relevant (skill ${answers.skill ? `${answers.skill.choice} ${pct(answers.skill.confidence)}` : "-"}, connector ${answers.connector ? `${answers.connector.choice} ${pct(answers.connector.confidence)}` : "-"})`);
 	return hints.length ? `<relevance source="typesafe-jev">Likely relevant for this request: ${hints.join("; ")}.</relevance>` : undefined;
 }

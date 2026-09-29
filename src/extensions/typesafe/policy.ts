@@ -182,6 +182,17 @@ export function buildScreenQuestions(): { addressed_to_agent: NoulQuestion; exfi
 /** At or above this, a screened result is marked as carrying instructions, and the user is told. */
 export const SCREEN_THRESHOLD = 0.6;
 
+/**
+ * How sure an answer was, in words. Only for grouping a log ("how often were we right when we were
+ * merely 'likely'?"); no decision is taken on the band itself, and the numbers below are the cuts
+ * the rest of the layer already uses.
+ */
+export function confidenceBand(confidence: number): "unsure" | "likely" | "confident" {
+	if (confidence < 0.5) return "unsure";
+	if (confidence < 0.8) return "likely";
+	return "confident";
+}
+
 /** Below this the routing answer is treated as unsure, and the default tier is used. */
 export const ROUTE_MIN_CONFIDENCE = 0.6;
 

@@ -11,7 +11,9 @@ import { basename, isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { minimatch } from "minimatch";
 import { clip, snapshotSession } from "./context.js";
-import { buildGateQuestions, decide, type GateSignals, type GateVerdict } from "./policy.js";
+import { buildGateQuestions, confidenceBand, decide, type GateSignals, type GateVerdict, THRESHOLDS } from "./policy.js";
+import { logDecision, logOutcome } from "../../logs/decisions.js";
+import { questionHash } from "./client.js";
 import type { ReflexState } from "./state.js";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls", "screenshot", "computer_observe"]);
@@ -207,6 +209,8 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 		const snap = snapshotSession(ctx, { maxToolCalls: 6 });
 		const started = performance.now();
 		let signals: GateSignals;
+		let jevModel: string | undefined;
+		let jevQhash: string | undefined;
 		try {
 			const res = await state.client.systemOne({
 				purpose: "gate",
@@ -221,6 +225,8 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 				questions: buildGateQuestions(),
 				signal: ctx.signal,
 			});
+			jevModel = res.model;
+			jevQhash = questionHash(buildGateQuestions());
 			const a = res.answers;
 			signals = {
 				destructive: a.destructive.noul,
@@ -243,6 +249,28 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 		const verdict = decide(signals, policy.riskAppetite, { hasUI: ctx.hasUI, protectedPathHit: protectedHit, readOnlyHint: isReadOnlyCommand(action) });
 		const ms = Math.round(performance.now() - started);
 		state.record("gate", `${verdict.decision} ${action.tool}: ${action.summary} [${verdict.rule}, ${ms}ms]`, { signals, reasons: verdict.reasons });
+		// Each noul next to the threshold it was compared against, so the cut-offs can be replayed later.
+		const t = THRESHOLDS[policy.riskAppetite];
+		const decisionId = logDecision({
+			source: "gate",
+			model: jevModel,
+			qhash: jevQhash,
+			action: verdict.decision,
+			rule: verdict.rule,
+			band: confidenceBand(signals.riskConfidence),
+			ms,
+			summary: `${action.tool}: ${action.summary}`,
+			signals: {
+				destructive: { primitive: "noul", value: signals.destructive, threshold: t.askIf.destructive },
+				outside_workspace: { primitive: "noul", value: signals.outsideWorkspace, threshold: t.askIf.outsideWorkspace },
+				secrets: { primitive: "noul", value: signals.secrets, threshold: t.askIf.secrets },
+				external_side_effect: { primitive: "noul", value: signals.externalSideEffect, threshold: t.askIf.externalSideEffect },
+				privilege: { primitive: "noul", value: signals.privilege, threshold: t.askIf.privilege },
+				intent_match: { primitive: "noul", value: signals.intentMatch, threshold: t.minIntent },
+				risk: { primitive: "score", value: signals.risk, confidence: signals.riskConfidence, threshold: t.maxAutoRisk },
+			},
+			detail: { appetite: policy.riskAppetite, reasons: verdict.reasons, protectedPathHit: protectedHit, hasUI: ctx.hasUI },
+		});
 		updateStatus(ctx, state);
 
 		if (verdict.decision === "allow") {
@@ -257,6 +285,7 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 		// ask
 		if (!ctx.hasUI) {
 			state.gate.blocked++;
+			logOutcome(decisionId, "blocked-no-ui", "an ask with nobody to ask");
 			return { block: true, reason: `Reflex needs user confirmation for this action (${verdict.reasons.join("; ")}) but no UI is available. Choose a safer approach or stop and report.` };
 		}
 		const answer = await askUser(ctx, action, verdict, undefined, state);
@@ -265,6 +294,8 @@ export function registerGate(pi: ExtensionAPI, state: ReflexState): void {
 			state.allowedHistory.push(`${action.tool}: ${action.summary} (user allowed for this session)`);
 		} else if (!answer.block) state.allowedHistory.push(`${action.tool}: ${action.summary} (user allowed once)`);
 		state.record("gate", `${answer.block ? "user-denied" : "user-allowed"} ${action.tool}: ${action.summary}`);
+		// The first real outcome: when Jev said "ask", what did the user actually say?
+		logOutcome(decisionId, answer.block ? "user-denied" : answer.remember ? "user-allowed-session" : "user-allowed");
 		updateStatus(ctx, state);
 		return answer.block ? { block: true, reason: answer.reason } : undefined;
 	});

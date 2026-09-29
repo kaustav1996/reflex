@@ -11,7 +11,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { basename } from "node:path";
 import { type ChoiceAnswer, isValidChoice } from "./client.js";
 import { clip, snapshotSession } from "./context.js";
-import { buildRoutingQuestion, ROUTE_MIN_CONFIDENCE, ROUTE_TIERS } from "./policy.js";
+import { buildRoutingQuestion, confidenceBand, ROUTE_MIN_CONFIDENCE, ROUTE_TIERS } from "./policy.js";
+import { logDecision } from "../../logs/decisions.js";
 import type { ReflexState, RouteTier } from "./state.js";
 
 export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
@@ -62,7 +63,7 @@ export function routingQuestion(state: ReflexState, prompt: string): ReturnType<
 }
 
 /** Switch the model (and the effort) for the tier Jev picked. */
-export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, state: ReflexState, answer: ChoiceAnswer): Promise<void> {
+export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, state: ReflexState, answer: ChoiceAnswer, log: { model?: string; qhash?: string } = {}): Promise<void> {
 	if (!isValidChoice(answer, Object.keys(ROUTE_TIERS))) return;
 	const { tiers, effort: efforts } = effectiveRouting(state);
 	state.router.decisions++;
@@ -72,6 +73,17 @@ export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, stat
 	const tier: RouteTier = unsure ? "default" : (answer.choice as RouteTier);
 	const target = tiers[tier] ?? tiers.default;
 	state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}%${unsure ? " (unsure → default)" : ""} → ${target ?? "(unchanged)"}`);
+	logDecision({
+		source: "route",
+		model: log.model,
+		qhash: log.qhash,
+		action: target ? `switch:${tier}` : "no-tier-model",
+		rule: unsure ? "unsure-to-default" : "tier",
+		band: confidenceBand(answer.confidence),
+		summary: `${answer.choice} → ${target ?? "(unchanged)"}`,
+		signals: { tier: { primitive: "choice", value: answer.probabilities[answer.choice] ?? answer.confidence, pick: answer.choice, confidence: answer.confidence, probabilities: answer.probabilities, threshold: ROUTE_MIN_CONFIDENCE } },
+		detail: { target, effort: efforts[tier] },
+	});
 	if (!target) return;
 	await switchModel(pi, ctx, state, target, tier, answer.confidence);
 	const effort = efforts[tier] ?? (tiers[tier] ? undefined : efforts.default);
