@@ -85,6 +85,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 					lastNudgeTurn = event.turnIndex;
 					state.monitor.loopNudges++;
 					turnDecision("nudge:loop", "two turns in a row");
+					state.nudgedThisPrompt = true;
 					nudge(pi, ctx, `Reflex (System One check, ${pct(looping.noul)} looping): you appear to be repeating the same actions without new results. Stop, state what you have learned, and either change approach or ask the user.`);
 					return;
 				}
@@ -92,6 +93,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 					lastNudgeTurn = event.turnIndex;
 					state.monitor.errorNudges++;
 					turnDecision("nudge:error");
+					state.nudgedThisPrompt = true;
 					nudge(pi, ctx, `Reflex (${pct(error_ignored.noul)}): the last tool result contained an error you did not address. Read it and handle it before continuing.`);
 					return;
 				}
@@ -150,13 +152,16 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 				continueNudges++;
 				state.monitor.continueNudges++;
 				completionDecision("nudge:continue");
+				state.nudgedThisPrompt = true;
 				nudge(pi, ctx, `Reflex (System One check): you described the next steps but ended the turn without doing them (${pct(stopped_midway.noul)}). Carry them out now with tools; don't repeat the plan. If something blocks you, say what it is.`, "followUp");
 				return;
 			}
 			if (claims_done.noul >= MONITOR_THRESHOLDS.claimsDone && verified.noul <= MONITOR_THRESHOLDS.verified) {
 				nudgedVerifyForPrompt = true;
 				state.monitor.verifyNudges++;
-				completionDecision("nudge:verify");
+				// Did the verification it demanded then pass, fail, or never run?
+				state.pending.verify = completionDecision("nudge:verify");
+				state.verifyJustAsked = true;
 				if (policy.riskAppetite === "bold") {
 					if (ctx.hasUI) ctx.ui.notify(`⚡ Reflex: completion claimed but nothing verified it (${pct(verified.noul)}).`, "warning");
 				} else {

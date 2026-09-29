@@ -64,6 +64,21 @@ export class ReflexState {
 	readonly sessionRoute: { pinned?: string; routing: Partial<Record<RouteTier, string>>; effort: Partial<Record<RouteTier, string>> } = { routing: {}, effort: {} };
 	/** True while the router itself is switching models, so its own switch isn't taken for the user's pick. */
 	routerSwitching = false;
+	/**
+	 * Decisions still waiting to find out how they turned out: the routing for this prompt, a
+	 * verification the completion check demanded, a skill it suggested. Each is closed by something
+	 * Reflex already sees (the user switching models back, the test that then failed, the read that
+	 * never happened) and written to the decision log as that decision's outcome.
+	 */
+	readonly pending: { route?: string; verify?: string; skill?: { id: string; name: string } } = {};
+	/**
+	 * The completion check asks for a verification at the *end* of a turn, and the model can only run
+	 * it in the turn that follows. Set when the nudge is sent and cleared by the next agent_end, so
+	 * that first end doesn't immediately record "never ran".
+	 */
+	verifyJustAsked = false;
+	/** Whether the monitor had to nudge during this prompt: the routing outcome for the turn. */
+	nudgedThisPrompt = false;
 	/** Actions the user allowed for the rest of the session (exact and scoped keys). */
 	readonly sessionAllow = new Set<string>();
 	/** Human-readable log of what the user allowed; sent to Jev as context so it stops re-asking about the same kind of thing. */
