@@ -99,7 +99,7 @@ export function applySelection(
 ): string | undefined {
 	const hints = hintsFrom(answers, rosters.skills, rosters.servers);
 	const signal = (a: ChoiceAnswer | undefined) => (a ? { primitive: "choice" as const, value: a.probabilities[a.choice] ?? a.confidence, pick: a.choice, confidence: a.confidence, probabilities: a.probabilities, threshold: MIN_HINT_PROBABILITY } : undefined);
-	logDecision({
+	const decisionId = logDecision({
 		source: "select",
 		model: log.model,
 		qhash: log.qhash,
@@ -110,6 +110,9 @@ export function applySelection(
 		detail: { offered: { skills: rosters.skills.length, connectors: rosters.servers.length } },
 	});
 	state.record("select", hints.length ? hints.join(" · ") : `none relevant (skill ${answers.skill ? `${answers.skill.choice} ${pct(answers.skill.confidence)}` : "-"}, connector ${answers.connector ? `${answers.connector.choice} ${pct(answers.connector.confidence)}` : "-"})`);
+	// Did the model read the skill that was suggested? agent_end answers when nothing did.
+	const suggested = answers.skill && answers.skill.choice !== "none" && hints.some((h) => h.startsWith(`skill "`)) ? answers.skill.choice : undefined;
+	state.pending.skill = suggested ? { id: decisionId, name: suggested } : undefined;
 	return hints.length ? `<relevance source="typesafe-jev">Likely relevant for this request: ${hints.join("; ")}.</relevance>` : undefined;
 }
 

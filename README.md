@@ -293,7 +293,12 @@ are recorded too, or there would be no base rate to compare against.
 
 Outcomes arrive later than decisions — a user answers an ask, a verification fails afterwards — so
 the file is append-only: an outcome is its own line naming the decision, and readers fold the two
-together. Today the gate records what you answered when it asked.
+together. They come from what Reflex already sees, with no extra questions and nothing asked of
+you: what you answered when the gate asked; whether you switched the model back by hand after a
+routing decision, and whether that turn needed a nudge; whether the verification the completion
+check demanded then passed, failed or never ran; and whether the model actually read the skill it
+was told about. An outcome that never arrives is recorded too, or the log would only hold the
+cases that went somewhere.
 
 ```bash
 reflex decisions --limit 20            # every decision, its numbers and what came of it

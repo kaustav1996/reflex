@@ -12,7 +12,7 @@ import { basename } from "node:path";
 import { type ChoiceAnswer, isValidChoice } from "./client.js";
 import { clip, snapshotSession } from "./context.js";
 import { buildRoutingQuestion, confidenceBand, ROUTE_MIN_CONFIDENCE, ROUTE_TIERS } from "./policy.js";
-import { logDecision } from "../../logs/decisions.js";
+import { logDecision, logOutcome } from "../../logs/decisions.js";
 import type { ReflexState, RouteTier } from "./state.js";
 
 export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
@@ -42,6 +42,11 @@ export function registerRouter(pi: ExtensionAPI, state: ReflexState): void {
 	// A model the user picks is theirs for the session: pin it and stop routing over it.
 	pi.on("model_select", async (event, ctx) => {
 		if (state.routerSwitching || event.source === "restore") return;
+		// Switching back by hand is the clearest signal the tier was wrong.
+		if (state.pending.route) {
+			logOutcome(state.pending.route, "user-overrode-model", `${event.model.provider}/${event.model.id}`);
+			state.pending.route = undefined;
+		}
 		state.sessionRoute.pinned = `${event.model.provider}/${event.model.id}`;
 		if (ctx.hasUI) {
 			ctx.ui.setStatus("reflex-route", routeStatus(state));
@@ -73,7 +78,7 @@ export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, stat
 	const tier: RouteTier = unsure ? "default" : (answer.choice as RouteTier);
 	const target = tiers[tier] ?? tiers.default;
 	state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}%${unsure ? " (unsure → default)" : ""} → ${target ?? "(unchanged)"}`);
-	logDecision({
+	state.pending.route = logDecision({
 		source: "route",
 		model: log.model,
 		qhash: log.qhash,
