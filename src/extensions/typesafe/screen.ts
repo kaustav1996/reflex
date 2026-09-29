@@ -10,6 +10,8 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildScreenQuestions, SCREEN_THRESHOLD } from "./policy.js";
+import { logDecision } from "../../logs/decisions.js";
+import { questionHash } from "./client.js";
 import { clip } from "./context.js";
 import type { ReflexState } from "./state.js";
 
@@ -41,6 +43,18 @@ export function registerScreen(pi: ExtensionAPI, state: ReflexState): void {
 			const { addressed_to_agent, exfiltration } = res.answers;
 			const worst = Math.max(addressed_to_agent.noul, exfiltration.noul);
 			state.record("screen", `${event.toolName}: instructions ${pct(addressed_to_agent.noul)} · exfiltration ${pct(exfiltration.noul)}${worst >= SCREEN_THRESHOLD ? " — marked as data" : ""}`);
+			logDecision({
+				source: "screen",
+				model: res.model,
+				qhash: questionHash(buildScreenQuestions()),
+				action: worst < SCREEN_THRESHOLD ? "pass" : exfiltration.noul >= SCREEN_THRESHOLD ? "mark:data" : "mark:addressed",
+				summary: `${event.toolName} · ${joined.length} chars`,
+				signals: {
+					addressed_to_agent: { primitive: "noul", value: addressed_to_agent.noul, threshold: SCREEN_THRESHOLD },
+					exfiltration: { primitive: "noul", value: exfiltration.noul, threshold: SCREEN_THRESHOLD },
+				},
+				detail: { tool: event.toolName },
+			});
 			if (worst < SCREEN_THRESHOLD) return undefined;
 
 			state.screened = (state.screened ?? 0) + 1;

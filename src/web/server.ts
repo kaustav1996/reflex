@@ -51,6 +51,7 @@ import { artifactsConfig, deployLogPath, listArtifacts, listDeploys, loadArtifac
 import { writeSecret } from "../extensions/secrets/store.js";
 import { rememberSecret } from "../extensions/secrets/index.js";
 import { callLogStats, clearCalls, readCalls, type CallKind } from "../logs/calls.js";
+import { clearDecisions, decisionLogStats, type DecisionSource, readDecisions } from "../logs/decisions.js";
 import { saveArtifact } from "../artifacts/store.js";
 
 /** LLM providers whose keys Pi stores in ~/.reflex/agent/auth.json. */
@@ -1038,6 +1039,16 @@ export async function runWeb(options: { port?: number; open?: boolean } = {}): P
 				const kinds = (url.searchParams.get("kind") ?? "").split(",").filter(Boolean) as CallKind[];
 				const entries = readCalls({ limit: Number(url.searchParams.get("limit") ?? 300), kinds, q: url.searchParams.get("q") ?? undefined, since: Number(url.searchParams.get("since") ?? 0) || undefined });
 				return json(res, 200, { entries, stats: callLogStats() });
+			}
+			// The decision log: what Jev answered, what the code did, and what became of it.
+			if (url.pathname === "/api/decisions" && req.method === "GET") {
+				const sources = (url.searchParams.get("source") ?? "").split(",").filter(Boolean) as DecisionSource[];
+				const decisions = readDecisions({ limit: Number(url.searchParams.get("limit") ?? 300), sources, since: Number(url.searchParams.get("since") ?? 0) || undefined, withOutcome: url.searchParams.get("outcome") === "1" });
+				return json(res, 200, { decisions, stats: decisionLogStats() });
+			}
+			if (url.pathname === "/api/decisions" && req.method === "DELETE") {
+				clearDecisions();
+				return json(res, 200, { ok: true });
 			}
 			if (url.pathname === "/api/logs" && req.method === "DELETE") {
 				clearCalls();

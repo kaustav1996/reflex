@@ -77,6 +77,36 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	// The decision log, as a table: every Jev decision with its numbers, what code did, and what came of it.
+	if (sub === "decisions") {
+		const { readDecisions, decisionLogStats } = await import("./logs/decisions.js");
+		const rest = args.slice(1);
+		const flag = (name: string) => {
+			const i = rest.indexOf(name);
+			return i >= 0 ? rest[i + 1] : undefined;
+		};
+		const rows = readDecisions({
+			limit: Number(flag("--limit") ?? 40),
+			sources: (flag("--source") ?? "").split(",").filter(Boolean) as never,
+			withOutcome: rest.includes("--with-outcome"),
+		});
+		const stats = decisionLogStats();
+		if (!rows.length) {
+			console.log(`no decisions logged yet (${stats.decisions} in the log)`);
+			return;
+		}
+		for (const d of rows) {
+			const when = new Date(d.at).toISOString().slice(5, 19).replace("T", " ");
+			const numbers = Object.entries(d.signals)
+				.map(([k, v]) => `${k}${v.pick ? `=${v.pick}` : ""} ${v.primitive === "score" ? v.value.toFixed(2) : `${Math.round(v.value * 100)}%`}${v.threshold === undefined ? "" : `/${v.threshold}`}`)
+				.join(" · ");
+			console.log(`${when}  ${d.source.padEnd(10)} ${d.action.padEnd(16)} ${d.summary.slice(0, 60)}`);
+			console.log(`${" ".repeat(14)}${numbers}${d.band ? `  [${d.band}]` : ""}${d.model ? `  ${d.model}` : ""}${d.outcome ? `  → ${d.outcome.label}` : ""}`);
+		}
+		console.log(`\n${rows.length} shown · ${stats.decisions} decisions, ${stats.outcomes} outcomes, ${(stats.bytes / 1024).toFixed(0)} KB`);
+		return;
+	}
+
 	if (sub === "doctor") {
 		const { runDoctor } = await import("./doctor.js");
 		await runDoctor();
@@ -166,6 +196,7 @@ Usage:
   reflex agent list|run|runs|create|delete    scheduled / webhook agents (see skill reflex-agents)
   reflex agent run <id> --trial               trial run: external steps are reported, not run
   reflex agent export <id> | import <file>     share an agent as a .reflex-agent.json; import opens a review session
+  reflex decisions [--source gate] [--limit 40]  every Jev decision: its numbers, what code did, what came of it
   reflex jev --state <text|@file> --questions <json|@file>   ask TypeSafe Jev directly (typed decisions in ~100ms)
   reflex connect [id]                          enable a built-in MCP connector (gmail, slack, atlassian, linear)
   reflex install <source> | remove <source>    install or remove a Pi package (e.g. git:github.com/affaan-m/ECC)

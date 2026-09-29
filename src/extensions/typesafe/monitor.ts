@@ -5,8 +5,9 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { snapshotSession } from "./context.js";
-import { buildCompletionQuestions, buildTurnMonitorQuestions, shouldNudgeContinue, MONITOR_THRESHOLDS } from "./policy.js";
+import { clip, snapshotSession } from "./context.js";
+import { logDecision, logOutcome } from "../../logs/decisions.js";
+import { buildCompletionQuestions, buildTurnMonitorQuestions, shouldNudgeContinue, MONITOR_THRESHOLDS, confidenceBand } from "./policy.js";
 
 /** Continue-nudges allowed per message the user sends (so a model that keeps planning can't loop). */
 export const MAX_CONTINUE_NUDGES = 2;
@@ -59,6 +60,23 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 				state.degradedReason = undefined;
 				const { looping, error_ignored, stuck } = res.answers;
 				state.record("monitor", `turn ${event.turnIndex}: loop ${pct(looping.noul)} · error-ignored ${pct(error_ignored.noul)} · stuck ${pct(stuck.noul)}`);
+				let loggedTurn = false;
+				const turnDecision = (action: string, rule?: string) => {
+					loggedTurn = true;
+					return logDecision({
+						source: "monitor",
+						model: res.model,
+						action,
+						rule,
+						summary: `turn ${event.turnIndex}`,
+						signals: {
+							looping: { primitive: "noul", value: looping.noul, threshold: MONITOR_THRESHOLDS.looping },
+							error_ignored: { primitive: "noul", value: error_ignored.noul, threshold: MONITOR_THRESHOLDS.errorIgnored },
+							stuck: { primitive: "noul", value: stuck.noul, threshold: MONITOR_THRESHOLDS.stuck },
+						},
+						detail: { turn: event.turnIndex, turnsWithTools },
+					});
+				};
 
 				consecutiveLoopSignals = looping.noul >= MONITOR_THRESHOLDS.looping ? consecutiveLoopSignals + 1 : 0;
 				const canNudge = event.turnIndex - lastNudgeTurn >= 3;
@@ -66,19 +84,24 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 				if (consecutiveLoopSignals >= 2 && canNudge) {
 					lastNudgeTurn = event.turnIndex;
 					state.monitor.loopNudges++;
+					turnDecision("nudge:loop", "two turns in a row");
 					nudge(pi, ctx, `Reflex (System One check, ${pct(looping.noul)} looping): you appear to be repeating the same actions without new results. Stop, state what you have learned, and either change approach or ask the user.`);
 					return;
 				}
 				if (error_ignored.noul >= MONITOR_THRESHOLDS.errorIgnored && canNudge) {
 					lastNudgeTurn = event.turnIndex;
 					state.monitor.errorNudges++;
+					turnDecision("nudge:error");
 					nudge(pi, ctx, `Reflex (${pct(error_ignored.noul)}): the last tool result contained an error you did not address. Read it and handle it before continuing.`);
 					return;
 				}
 				if (stuck.noul >= MONITOR_THRESHOLDS.stuck && turnsWithTools >= MONITOR_THRESHOLDS.stuckAfterTurns && canNudge) {
 					lastNudgeTurn = event.turnIndex;
+					turnDecision("warn:stuck");
 					if (ctx.hasUI) ctx.ui.notify(`⚡ Reflex: agent looks stuck (${pct(stuck.noul)}). Press Esc to interrupt or let it continue.`, "warning");
 				}
+				// A turn where nothing fired is evidence too: without it there are no base rates.
+				if (!loggedTurn) turnDecision("none");
 			} catch (err) {
 				if (!ctx.signal?.aborted) state.degradedReason = err instanceof Error ? err.message : String(err);
 			} finally {
@@ -106,16 +129,34 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 			state.monitor.checks++;
 			const { claims_done, verified, scope_drift, needs_user, stopped_midway } = res.answers;
 			state.record("completion", `done ${pct(claims_done.noul)} · verified ${pct(verified.noul)} · drift ${pct(scope_drift.noul)} · needs-user ${pct(needs_user.noul)} · stopped-midway ${pct(stopped_midway.noul)}`);
-			if (needs_user.noul >= MONITOR_THRESHOLDS.needsUser) return;
+			const completionDecision = (action: string, rule?: string) =>
+				logDecision({
+					source: "completion",
+					model: res.model,
+					action,
+					rule,
+					summary: clip(snap.userRequest ?? "(no request)", 120),
+					signals: {
+						claims_done: { primitive: "noul", value: claims_done.noul, threshold: MONITOR_THRESHOLDS.claimsDone },
+						verified: { primitive: "noul", value: verified.noul, threshold: MONITOR_THRESHOLDS.verified },
+						scope_drift: { primitive: "noul", value: scope_drift.noul, threshold: MONITOR_THRESHOLDS.scopeDrift },
+						needs_user: { primitive: "noul", value: needs_user.noul, threshold: MONITOR_THRESHOLDS.needsUser },
+						stopped_midway: { primitive: "noul", value: stopped_midway.noul },
+					},
+					detail: { changed, appetite: policy.riskAppetite },
+				});
+			if (needs_user.noul >= MONITOR_THRESHOLDS.needsUser) return void completionDecision("none", "waiting on the user");
 			if (shouldNudgeContinue({ claims_done: claims_done.noul, needs_user: needs_user.noul, stopped_midway: stopped_midway.noul }) && continueNudges < MAX_CONTINUE_NUDGES) {
 				continueNudges++;
 				state.monitor.continueNudges++;
+				completionDecision("nudge:continue");
 				nudge(pi, ctx, `Reflex (System One check): you described the next steps but ended the turn without doing them (${pct(stopped_midway.noul)}). Carry them out now with tools; don't repeat the plan. If something blocks you, say what it is.`, "followUp");
 				return;
 			}
 			if (claims_done.noul >= MONITOR_THRESHOLDS.claimsDone && verified.noul <= MONITOR_THRESHOLDS.verified) {
 				nudgedVerifyForPrompt = true;
 				state.monitor.verifyNudges++;
+				completionDecision("nudge:verify");
 				if (policy.riskAppetite === "bold") {
 					if (ctx.hasUI) ctx.ui.notify(`⚡ Reflex: completion claimed but nothing verified it (${pct(verified.noul)}).`, "warning");
 				} else {
@@ -124,6 +165,7 @@ export function registerMonitor(pi: ExtensionAPI, state: ReflexState): void {
 			}
 			if (scope_drift.noul >= MONITOR_THRESHOLDS.scopeDrift && ctx.hasUI) {
 				state.monitor.driftWarnings++;
+				completionDecision("warn:drift");
 				ctx.ui.notify(`⚡ Reflex: changes may go beyond what you asked (${pct(scope_drift.noul)}). Check the diff.`, "info");
 			}
 		} catch (err) {
