@@ -236,6 +236,30 @@ export function confidenceBand(confidence: number): "unsure" | "likely" | "confi
 /** Below this the routing answer is treated as unsure, and the default tier is used. */
 export const ROUTE_MIN_CONFIDENCE = 0.6;
 
+/** Below this, no skill is suggested however the Choice ranked them. */
+export const SKILL_GATE_THRESHOLD = 0.5;
+/** A first-stage winner this strong is taken as it is; anything less goes to a second look. */
+export const SKILL_CONFIDENT_ENOUGH = 0.8;
+/** Candidates carried from the first stage into the second. */
+export const SKILL_SHORTLIST = 3;
+
+/**
+ * Second stage: each shortlisted skill judged on its own merits. A Choice compares options against
+ * each other, so a weak field still produces a winner; a noul per candidate asks whether that one
+ * would actually help, which is the question that matters.
+ */
+export function buildSkillFitQuestions(names: string[], describe: (name: string) => string): Record<string, NoulQuestion> {
+	const questions: Record<string, NoulQuestion> = {};
+	for (const name of names) {
+		questions[name] = noul({
+			question: `Would the instructions in the skill "${name}" (${describe(name)}) materially help carry out request?`,
+			inspect: ["request", "recent_context"],
+			note: "Answer for this skill alone, not compared with any other.",
+		});
+	}
+	return questions;
+}
+
 /** A relevance hint is only shown when the winning option is at least this likely. */
 export const MIN_HINT_PROBABILITY = 0.5;
 
@@ -243,9 +267,18 @@ export const MIN_HINT_PROBABILITY = 0.5;
 export const MAX_CHOICE_OPTIONS = 250;
 
 /** The skill and connector questions for a request, over the rosters that exist right now. */
-export function buildSelectionQuestions(skillCriteria: Record<string, string>, serverCriteria: Record<string, string>): { skill?: ChoiceQuestion; connector?: ChoiceQuestion } {
-	const questions: { skill?: ChoiceQuestion; connector?: ChoiceQuestion } = {};
-	if (Object.keys(skillCriteria).length > 1) questions.skill = choice({ question: "Which skill's instructions would most help carry out request? Pick none when ordinary knowledge suffices.", inspect: ["request", "recent_context"] }, skillCriteria);
+export function buildSelectionQuestions(skillCriteria: Record<string, string>, serverCriteria: Record<string, string>): { skill?: ChoiceQuestion; skill_needed?: NoulQuestion; connector?: ChoiceQuestion } {
+	const questions: { skill?: ChoiceQuestion; skill_needed?: NoulQuestion; connector?: ChoiceQuestion } = {};
+	if (Object.keys(skillCriteria).length > 1) {
+		questions.skill = choice({ question: "Which skill's instructions would most help carry out request? Pick none when ordinary knowledge suffices.", inspect: ["request", "recent_context"] }, skillCriteria);
+		// A Choice always names a winner, even among options that all fit badly. This asks the other
+		// question — whether any instructions are wanted at all — and rides in the same request.
+		questions.skill_needed = noul({
+			question: "Is request the kind of task whose outcome a written procedure, house style, checklist or format could change — rather than something to simply do and answer?",
+			inspect: ["request", "recent_context"],
+			note: "Reading files, running commands, answering a factual question and ordinary code edits need no instructions. A task with a particular format, style, process, or tooling someone wrote down for it does.",
+		});
+	}
 	if (Object.keys(serverCriteria).length > 1) questions.connector = choice({ question: "Which external connector (MCP server) does request need? Pick none when local files and the shell are enough.", inspect: "request" }, serverCriteria);
 	return questions;
 }

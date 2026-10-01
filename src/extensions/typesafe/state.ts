@@ -60,6 +60,8 @@ export class ReflexState {
 	trimmedTokens = 0;
 	/** Characters of stale tool output left out of requests this session. */
 	prunedChars = 0;
+	/** Connector servers whose tools the model has already used: never withheld again. */
+	readonly usedServers = new Set<string>();
 	readonly router: RouterStats = { decisions: 0, switches: 0, byTier: {} };
 	/**
 	 * Routing for this session only (never saved): a model the user picked, which pauses routing,

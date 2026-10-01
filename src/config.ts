@@ -90,6 +90,8 @@ export interface ReflexPolicyConfig {
 	trimToolOutput?: boolean;
 	/** Prune stale tool results from a long session instead of summarising it. */
 	pruneContext?: boolean;
+	/** Carry only the connector tools a request needs; the rest come back on demand. */
+	selectTools?: boolean;
 }
 
 export interface ReflexConfig {
@@ -140,6 +142,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		screenResults: true,
 		trimToolOutput: true,
 		pruneContext: true,
+		selectTools: true,
 	},
 	llm: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 	ui: { theme: "typesafe" },
