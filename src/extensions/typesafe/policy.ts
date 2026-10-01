@@ -196,6 +196,26 @@ export function buildTrimQuestions(indices: number[]): Record<string, NoulQuesti
 	return questions;
 }
 
+/**
+ * Pruning a long session: one noul per old tool result, all against one state, each inspecting only
+ * its own field. The question is deliberately about the rest of the task, not about whether the
+ * output was interesting when it arrived.
+ */
+export function buildPruneQuestions(ids: string[]): Record<string, NoulQuestion> {
+	const questions: Record<string, NoulQuestion> = {};
+	for (const id of ids) {
+		questions[id] = noul({
+			question: `Will the assistant still need ${id} to finish task — a value, path, name or error in it that it will have to refer to again?`,
+			inspect: [id, "task", "recent_work"],
+			note: "Output that has already been acted on, superseded by a later result, or was only a step along the way is no longer needed. Keep anything describing the current state of the work.",
+		});
+	}
+	return questions;
+}
+
+/** At or above this the result stays. Low, for the same reason as trimming: losing something needed costs more. */
+export const PRUNE_KEEP_THRESHOLD = 0.4;
+
 /** At or above this a chunk is kept. Low on purpose: dropping something needed costs far more than keeping noise. */
 export const TRIM_KEEP_THRESHOLD = 0.35;
 

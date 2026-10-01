@@ -58,6 +58,8 @@ export class ReflexState {
 	screened = 0;
 	/** Roughly how many input tokens trimming has saved this session. */
 	trimmedTokens = 0;
+	/** Characters of stale tool output left out of requests this session. */
+	prunedChars = 0;
 	readonly router: RouterStats = { decisions: 0, switches: 0, byTier: {} };
 	/**
 	 * Routing for this session only (never saved): a model the user picked, which pauses routing,
