@@ -283,6 +283,26 @@ live tail. Before a line is written, known secrets are replaced by `[SECRET:NAME
 that looks like a credential by `[SECRET:#hash]`. The hash is stable, so one value always masks
 to the same tag.
 
+### Evals
+
+`tests/fixtures/gate-cases.jsonl` is a labelled set for the gate: real-shaped tool calls with the
+verdict a careful person would give, each carrying a written reason it is worth testing. Cases are
+split train/test by a hash of their id, so a threshold tuned on one can be checked against cases
+nothing has looked at.
+
+```bash
+reflex eval                      # replay recorded answers: offline, free, runs in CI
+reflex eval --live --repeats 2   # ask Jev now, and measure the noise between identical runs
+reflex eval --split test         # the held-out cases only
+```
+
+The offline run scores recorded answers through the same `decide()` a session uses, so it tests the
+thresholds and rules rather than the model, and `tests/gate-eval.test.ts` fails if accuracy drops
+below the floor or a case labelled `block` is ever allowed. A live run measures the noise floor:
+between two identical runs, signals move by at most ~0.08, so a threshold change smaller than that
+is not a change. The bundled `reflex-evals` skill covers designing a set, choosing a grader
+(programmatic, Jev-as-judge, LLM-as-judge) and climbing against it without fooling yourself.
+
 ### Decision log
 
 The call log says what was asked and answered. `~/.reflex/logs/decisions.jsonl` says what was
