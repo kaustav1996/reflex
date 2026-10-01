@@ -107,6 +107,44 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	// The labelled gate set: replay recorded answers (free, offline) or ask Jev now (needs a key).
+	if (sub === "eval") {
+		const rest = args.slice(1);
+		const flag = (name: string) => {
+			const i = rest.indexOf(name);
+			return i >= 0 ? rest[i + 1] : undefined;
+		};
+		const { loadCases, scoreOffline, splitOf } = await import("./evals/gate.js");
+		let cases = loadCases();
+		const split = flag("--split");
+		if (split === "train" || split === "test") cases = cases.filter((c) => splitOf(c.id) === split);
+		const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+		let report: ReturnType<typeof scoreOffline>;
+		let noise: Record<string, { maxSpread: number; meanSpread: number }> | undefined;
+		if (rest.includes("--live")) {
+			const { recordInto, runLive } = await import("./evals/run.js");
+			const repeats = Number(flag("--repeats") ?? 1);
+			console.log(`asking Jev about ${cases.length} cases${repeats > 1 ? ` × ${repeats} runs (to measure noise)` : ""} …`);
+			const live = await runLive(cases, { repeats });
+            report = live.report;
+			noise = live.noise;
+			for (const e of live.errors) console.log(`  ! ${e.id}: ${e.error}`);
+			if (rest.includes("--record")) console.log(`recorded answers for ${recordInto(cases, live.signals)} cases`);
+		} else {
+			report = scoreOffline(cases);
+			if (report.missingRecordings.length) console.log(`${report.missingRecordings.length} cases have no recorded answers (run with --live --record)`);
+		}
+		for (const r of report.results.filter((x) => !x.ok)) console.log(`  ✗ ${r.id.padEnd(30)} want ${r.label.padEnd(5)} got ${r.got.padEnd(5)} [${r.rule}]`);
+		console.log(`\n${report.results.length} cases · accuracy ${pct(report.accuracy.all)} [${pct(report.interval[0])}–${pct(report.interval[1])}]`);
+		console.log(`train ${pct(report.accuracy.train)} · held-out test ${pct(report.accuracy.test)}${report.accuracy.train - report.accuracy.test > 0.1 ? "   ← train far ahead of test: that is what overfitting looks like" : ""}`);
+		console.log(Object.entries(report.byDecision).map(([k, v]) => `${k} ${v.correct}/${v.n}`).join(" · "));
+		if (noise) {
+			console.log("\nnoise between identical runs (a change smaller than this is not a change):");
+			for (const [k, v] of Object.entries(noise)) console.log(`  ${k.padEnd(20)} max ${v.maxSpread.toFixed(3)} · mean ${v.meanSpread.toFixed(3)}`);
+		}
+		return;
+	}
+
 	if (sub === "doctor") {
 		const { runDoctor } = await import("./doctor.js");
 		await runDoctor();
@@ -197,6 +235,7 @@ Usage:
   reflex agent run <id> --trial               trial run: external steps are reported, not run
   reflex agent export <id> | import <file>     share an agent as a .reflex-agent.json; import opens a review session
   reflex decisions [--source gate] [--limit 40]  every Jev decision: its numbers, what code did, what came of it
+  reflex eval [--live] [--repeats 2] [--split test]  the labelled gate set: accuracy, held-out split, noise
   reflex jev --state <text|@file> --questions <json|@file>   ask TypeSafe Jev directly (typed decisions in ~100ms)
   reflex connect [id]                          enable a built-in MCP connector (gmail, slack, atlassian, linear)
   reflex install <source> | remove <source>    install or remove a Pi package (e.g. git:github.com/affaan-m/ECC)
