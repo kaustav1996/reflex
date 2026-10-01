@@ -14,6 +14,7 @@ import { registerRequestBrief } from "./brief.js";
 import { registerScreen } from "./screen.js";
 import { registerOutcomes } from "./outcomes.js";
 import { registerTrimmer } from "./trimmer.js";
+import { registerPruner } from "./pruner.js";
 import { ReflexState } from "./state.js";
 
 export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI) => ReflexState {
@@ -65,6 +66,8 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		registerOutcomes(pi, state);
 		// Long tool output is read once and re-read every turn after: trim it on the way in.
 		registerTrimmer(pi, state);
+		// A long session is mostly stale tool output: prune it rather than paraphrase it.
+		registerPruner(pi, state);
 
 		pi.on("session_start", async (_e, ctx) => {
 			applyFlag();

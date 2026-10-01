@@ -88,6 +88,8 @@ export interface ReflexPolicyConfig {
 	screenResults?: boolean;
 	/** Trim very long tool output with Jev before the model reads it (the full text is saved to disk). */
 	trimToolOutput?: boolean;
+	/** Prune stale tool results from a long session instead of summarising it. */
+	pruneContext?: boolean;
 }
 
 export interface ReflexConfig {
@@ -137,6 +139,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		selectSkills: true,
 		screenResults: true,
 		trimToolOutput: true,
+		pruneContext: true,
 	},
 	llm: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 	ui: { theme: "typesafe" },
