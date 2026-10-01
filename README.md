@@ -303,6 +303,20 @@ between two identical runs, signals move by at most ~0.08, so a threshold change
 is not a change. The bundled `reflex-evals` skill covers designing a set, choosing a grader
 (programmatic, Jev-as-judge, LLM-as-judge) and climbing against it without fooling yourself.
 
+The same machinery runs **your** evals, not just Reflex's. Describe one in a JSON file — cases with a
+stated reason each is hard, how to produce an answer (a command, or a headless session), and how to
+grade it (exact, regex, schema, a command, or a Jev rubric of checkable claims):
+
+```bash
+reflex eval my-eval.json --repeats 2                      # score, held-out split, noise floor
+reflex hillclimb my-eval.json --surface prompts/system.md # improve it, one change per round
+```
+
+The climb measures the noise first, then shows a session only the training failures, lets it change
+the files you nominated, re-runs and decides in code: keep only when the held-out cases improve too,
+revert a train-only gain as overfitting, revert any patch that copied case text into a prompt, and
+restore the files on every revert.
+
 ### Decision log
 
 The call log says what was asked and answered. `~/.reflex/logs/decisions.jsonl` says what was

@@ -90,7 +90,49 @@ Rules that keep the climb honest:
 - Finish on the version that did best on **test**, and report the gain with its interval. If the
   gain is inside the noise, say so and recommend against shipping it.
 
-## 5. In this repo
+## 5. Your own eval, in your own project
+
+Describe it in a JSON file (`reflex-eval.json`, or any path), so it lives in the repo and runs in CI:
+
+```json
+{
+  "name": "support-router",
+  "run":   { "command": "node route.mjs", "stdin": "{{input}}" },
+  "grade": { "kind": "exact" },
+  "cases": [
+    { "id": "refund", "whyHard": "A refund request that never says the word billing",
+      "input": "I was charged twice for March", "expected": "billing" }
+  ]
+}
+```
+
+- `run` is either a **command** (the case is substituted into argv and stdin; stdout is the answer)
+  or a **session** (`{"kind":"session","prompt":"…{{input}}…"}`, a headless Reflex session in the
+  project). `casesFile` points at a `.jsonl` when the cases outgrow the file.
+- `grade` is `exact`, `contains`, `regex`, `json-schema`, `command` (exit 0 passes), or
+  **`jev-claims`** — the rubric as checkable claims, one `noul` each, in a single Jev request.
+- `{{input}}`, `{{expected}}`, `{{id}}` and `{{output}}` are filled from the case.
+
+```bash
+reflex eval my-eval.json --repeats 2      # score, held-out split, interval, and the noise floor
+reflex eval my-eval.json --split test     # the held-out cases only
+reflex hillclimb my-eval.json --surface prompts/system.md --rounds 5 \
+  --notes "how the file is actually used, so a change can take effect"
+```
+
+The climb measures the noise floor first, then each round: shows a Reflex session **only the train
+failures** (ids, why each is hard, what the grader objected to — never the case text), lets it change
+the surfaces you nominated, re-runs, and then decides in code. It keeps a round only when train and
+held-out both improve by more than the noise; it reverts a regression, reverts a train-only gain as
+overfitting, and reverts any patch that copied case text into a surface. The surface files are
+restored on every revert, so a failed round leaves nothing behind. Pass `--notes` describing how your
+surface is consumed, or the climber may write something your system never reads.
+
+Worked example, from this repo's own test run: given a keyword router, the climber added rules that
+took train from 40% to 100% while the held-out cases never moved. All three rounds were reverted.
+That is the tool working, not failing — those rules fit the cases it could see and nothing else.
+
+## 6. In this repo
 
 ```bash
 reflex eval                          # replay recorded answers: offline, free, runs in CI

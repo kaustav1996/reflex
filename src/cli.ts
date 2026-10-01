@@ -107,6 +107,62 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	// Climb against an eval: one change per round, held-out split, revert anything that doesn't hold up.
+	if (sub === "hillclimb") {
+		const rest = args.slice(1);
+		const flag = (name: string) => {
+			const i = rest.indexOf(name);
+			return i >= 0 ? rest[i + 1] : undefined;
+		};
+		const specFile = rest.find((a) => !a.startsWith("--") && a.endsWith(".json")) ?? "reflex-eval.json";
+		const surfaces = (flag("--surface") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+		if (!surfaces.length) throw new Error("--surface is required: the file(s) the climb may change, e.g. --surface prompts/system.md");
+		const { loadSpec } = await import("./evals/spec.js");
+		const { runEval } = await import("./evals/project.js");
+		const { CLIMB_INSTRUCTIONS, climbReport, hillclimb } = await import("./evals/hillclimb.js");
+		const spec = loadSpec(specFile);
+		const goal = flag("--goal") ?? "performance";
+		const rounds = Number(flag("--rounds") ?? 5);
+
+		// The noise floor comes first: without it, a round can "win" by chance.
+		let noise = Number(flag("--noise") ?? Number.NaN);
+		if (Number.isNaN(noise)) {
+			console.log(`measuring the noise floor: running "${spec.name}" twice, unchanged …`);
+			const twice = await runEval(spec, { repeats: 2 });
+			noise = twice.noise ?? 0;
+			console.log(`  the score moved ${(noise * 100).toFixed(1)}% between identical runs; nothing smaller than that counts as a change\n`);
+		}
+
+		const propose = async (brief: string, round: number) => {
+			const prompt = [
+				CLIMB_INSTRUCTIONS,
+				`\nRound ${round}. Goal: ${goal === "cost" ? "reduce cost while the score holds" : "improve the score"}.`,
+				`Surfaces you may change: ${surfaces.join(", ")}`,
+				flag("--notes") ? `\nHow the surface is used: ${flag("--notes")}` : "",
+				`\nFailures on the training split:\n${brief}`,
+			].join("\n");
+			const { spawnSync } = await import("node:child_process");
+			const r = spawnSync(process.execPath, [process.argv[1], "--mode", "text", "--reflex", "balanced", "-p", prompt], { cwd: spec.dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+			return (r.stdout ?? "").trim().split("\n").slice(-3).join(" ") || "(no reply)";
+		};
+
+		const result = await hillclimb(spec, {
+			surfaces,
+			rounds,
+			noise,
+			propose,
+			onRound: (log) => console.log(`round ${log.round}: ${log.decision.keep ? "kept" : "reverted"} — ${log.decision.reason}`),
+		});
+		console.log(`\n${climbReport(result, noise)}`);
+		const out = flag("--report");
+		if (out) {
+			const { writeClimbReport } = await import("./evals/hillclimb.js");
+			writeClimbReport(out, result, noise);
+			console.log(`\nwritten to ${out}`);
+		}
+		return;
+	}
+
 	// The labelled gate set: replay recorded answers (free, offline) or ask Jev now (needs a key).
 	if (sub === "eval") {
 		const rest = args.slice(1);
@@ -114,6 +170,23 @@ async function run(): Promise<void> {
 			const i = rest.indexOf(name);
 			return i >= 0 ? rest[i + 1] : undefined;
 		};
+		const config = flag("--config") ?? (rest.find((a) => !a.startsWith("--") && a.endsWith(".json")));
+		if (config) {
+			// A user's own eval: their cases, their runner, their grader.
+			const { loadSpec } = await import("./evals/spec.js");
+			const { runEval } = await import("./evals/project.js");
+			const spec = loadSpec(config);
+			const split = flag("--split");
+			const repeats = Number(flag("--repeats") ?? spec.repeats ?? 1);
+			const r = await runEval(spec, { split: split === "train" || split === "test" ? split : undefined, repeats, onCase: rest.includes("--quiet") ? undefined : (id, n) => process.stdout.write(`\r  ${id}${repeats > 1 ? ` (run ${n})` : ""}${" ".repeat(20)}`) });
+			process.stdout.write("\r");
+			for (const x of r.results.filter((x) => !x.pass)) console.log(`  ✗ ${x.id.padEnd(28)} ${(x.detail ?? x.error ?? "failed").slice(0, 90)}`);
+			const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+			console.log(`\n${spec.name}: ${r.results.length} cases · score ${pct(r.score.all)} [${pct(r.interval[0])}–${pct(r.interval[1])}]`);
+			console.log(`train ${pct(r.score.train)} · held-out ${pct(r.score.test)}${r.errors ? ` · ${r.errors} errored` : ""}`);
+			if (r.noise !== undefined) console.log(`noise between identical runs: ${pct(r.noise)} — a change smaller than this is not a change`);
+			return;
+		}
 		const { loadCases, scoreOffline, splitOf } = await import("./evals/gate.js");
 		let cases = loadCases();
 		const split = flag("--split");
@@ -236,6 +309,8 @@ Usage:
   reflex agent export <id> | import <file>     share an agent as a .reflex-agent.json; import opens a review session
   reflex decisions [--source gate] [--limit 40]  every Jev decision: its numbers, what code did, what came of it
   reflex eval [--live] [--repeats 2] [--split test]  the labelled gate set: accuracy, held-out split, noise
+  reflex eval <your-eval.json>                 run your own eval (cases, runner, grader; see skill reflex-evals)
+  reflex hillclimb <your-eval.json> --surface prompts/system.md [--notes "how the file is used"]
   reflex jev --state <text|@file> --questions <json|@file>   ask TypeSafe Jev directly (typed decisions in ~100ms)
   reflex connect [id]                          enable a built-in MCP connector (gmail, slack, atlassian, linear)
   reflex install <source> | remove <source>    install or remove a Pi package (e.g. git:github.com/affaan-m/ECC)
