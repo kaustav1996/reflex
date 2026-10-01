@@ -179,6 +179,26 @@ export function buildScreenQuestions(): { addressed_to_agent: NoulQuestion; exfi
 	};
 }
 
+/**
+ * Trimming long tool output: one noul per chunk, all against one state. The chunks live in the
+ * state as `chunk_0`, `chunk_1` … and each question inspects only its own, because questions are
+ * answered in parallel and cannot read each other's answers.
+ */
+export function buildTrimQuestions(indices: number[]): Record<string, NoulQuestion> {
+	const questions: Record<string, NoulQuestion> = {};
+	for (const i of indices) {
+		questions[`chunk_${i}`] = noul({
+			question: `Does chunk_${i} contain anything the assistant still needs to carry out task — a result, an error, a name, a number or a path it will have to refer to?`,
+			inspect: [`chunk_${i}`, "task", "command"],
+			note: "Repetitive progress lines, successful-step noise, download bars and long listings of unremarkable items are not needed. When in doubt about a short chunk, keep it.",
+		});
+	}
+	return questions;
+}
+
+/** At or above this a chunk is kept. Low on purpose: dropping something needed costs far more than keeping noise. */
+export const TRIM_KEEP_THRESHOLD = 0.35;
+
 /** At or above this, a screened result is marked as carrying instructions, and the user is told. */
 export const SCREEN_THRESHOLD = 0.6;
 

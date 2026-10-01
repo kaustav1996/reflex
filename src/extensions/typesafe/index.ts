@@ -13,6 +13,7 @@ import { registerSelectorRenderer } from "./selector.js";
 import { registerRequestBrief } from "./brief.js";
 import { registerScreen } from "./screen.js";
 import { registerOutcomes } from "./outcomes.js";
+import { registerTrimmer } from "./trimmer.js";
 import { ReflexState } from "./state.js";
 
 export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI) => ReflexState {
@@ -62,6 +63,8 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		registerScreen(pi, state);
 		// How those decisions turned out, from what Reflex already sees.
 		registerOutcomes(pi, state);
+		// Long tool output is read once and re-read every turn after: trim it on the way in.
+		registerTrimmer(pi, state);
 
 		pi.on("session_start", async (_e, ctx) => {
 			applyFlag();

@@ -86,6 +86,8 @@ export interface ReflexPolicyConfig {
 	selectSkills: boolean;
 	/** Screen results that came from outside this machine for instructions aimed at the agent. */
 	screenResults?: boolean;
+	/** Trim very long tool output with Jev before the model reads it (the full text is saved to disk). */
+	trimToolOutput?: boolean;
 }
 
 export interface ReflexConfig {
@@ -134,6 +136,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		verbose: true,
 		selectSkills: true,
 		screenResults: true,
+		trimToolOutput: true,
 	},
 	llm: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 	ui: { theme: "typesafe" },
