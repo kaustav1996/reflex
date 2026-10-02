@@ -25,7 +25,8 @@ function setup(opts: { routing?: boolean; skills?: boolean } = {}) {
 			requests.push(req);
 			const answers: Record<string, unknown> = {};
 			if (req.questions.tier) answers.tier = { type: "choice", choice: "strong", confidence: 0.9, probabilities: { fast: 0.05, default: 0.05, strong: 0.9 } };
-			if (req.questions.skill) answers.skill = { type: "choice", choice: "deploy", confidence: 0.8, probabilities: { none: 0.2, deploy: 0.8 } };
+			if (req.questions.skill) answers.skill = { type: "choice", choice: "deploy", confidence: 0.85, probabilities: { none: 0.15, deploy: 0.85 } };
+			if (req.questions.skill_needed) answers.skill_needed = { type: "noul", noul: 0.9 };
 			return { answers, usage: { input_tokens: 10 }, latencyMs: 1 };
 		},
 	} as never;
@@ -43,7 +44,7 @@ test("routing and relevance are one Jev call, not one per question", async () =>
 	const s = setup();
 	const out = (await s.ask()) as { message?: { content: string } } | undefined;
 	assert.equal(s.requests.length, 1, "one call for the whole request");
-	assert.deepEqual(Object.keys(s.requests[0].questions).sort(), ["skill", "tier"], "both questions ride along");
+	assert.deepEqual(Object.keys(s.requests[0].questions).sort(), ["skill", "skill_needed", "tier"], "routing, the skill choice and its gate all ride along");
 	// The state is charged once per call, so the request text must appear exactly once.
 	const state = s.requests[0].state as { request: string; recent_context: string };
 	assert.match(state.request, /deploy the staging service/);
@@ -55,7 +56,7 @@ test("routing and relevance are one Jev call, not one per question", async () =>
 test("only the questions that apply are asked", async () => {
 	const noRouting = setup({ routing: false });
 	await noRouting.ask();
-	assert.deepEqual(Object.keys(noRouting.requests[0].questions), ["skill"]);
+	assert.deepEqual(Object.keys(noRouting.requests[0].questions).sort(), ["skill", "skill_needed"]);
 	assert.deepEqual(noRouting.switched, []);
 
 	const noSkills = setup({ skills: false });

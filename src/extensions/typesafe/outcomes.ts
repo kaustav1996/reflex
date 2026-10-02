@@ -41,6 +41,9 @@ export function registerOutcomes(pi: ExtensionAPI, state: ReflexState): void {
 	});
 
 	pi.on("tool_call", async (event) => {
+		// A connector the model reaches for is one it may reach for again: never withhold it after this.
+		const server = event.toolName.includes("__") ? event.toolName.split("__")[0] : undefined;
+		if (server) state.usedServers.add(server);
 		const skill = state.pending.skill;
 		if (skill && readsSkill(event.toolName, (event.input ?? {}) as Record<string, unknown>, skill.name)) {
 			logOutcome(skill.id, "skill-read", skill.name);
