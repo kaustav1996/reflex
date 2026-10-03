@@ -33,6 +33,8 @@ export type RouteTier = "fast" | "default" | "strong";
 export interface RouterStats {
 	decisions: number;
 	switches: number;
+	/** Switches declined because re-reading the context would have cost more than the switch saved. */
+	cacheKeeps: number;
 	byTier: Record<string, number>;
 }
 
@@ -62,7 +64,14 @@ export class ReflexState {
 	prunedChars = 0;
 	/** Connector servers whose tools the model has already used: never withheld again. */
 	readonly usedServers = new Set<string>();
-	readonly router: RouterStats = { decisions: 0, switches: 0, byTier: {} };
+	/**
+	 * Roughly how many tokens the next turn carries in, from the last turn's usage. Used to price a
+	 * model switch: that context is read at the cache rate now, and at full price on another model.
+	 */
+	contextTokens = 0;
+	/** True at the start of a session and just after a compaction: there is no cache to lose. */
+	cacheIsCold = true;
+	readonly router: RouterStats = { decisions: 0, switches: 0, cacheKeeps: 0, byTier: {} };
 	/**
 	 * Routing for this session only (never saved): a model the user picked, which pauses routing,
 	 * and tier models / efforts that replace the saved ones until the session ends.

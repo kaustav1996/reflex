@@ -13,6 +13,7 @@ import { type ChoiceAnswer, isValidChoice } from "./client.js";
 import { clip, snapshotSession } from "./context.js";
 import { buildRoutingQuestion, confidenceBand, ROUTE_MIN_CONFIDENCE, ROUTE_TIERS } from "./policy.js";
 import { logDecision, logOutcome } from "../../logs/decisions.js";
+import { contextTokensFrom, type Rates, worthSwitching } from "./cache.js";
 import type { ReflexState, RouteTier } from "./state.js";
 
 export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
@@ -39,6 +40,21 @@ export function routeStatus(state: Pick<ReflexState, "config" | "sessionRoute">)
 }
 
 export function registerRouter(pi: ExtensionAPI, state: ReflexState): void {
+	// How much context the next turn carries, and whether anything is cached for the current model.
+	pi.on("turn_end", (event) => {
+		const tokens = contextTokensFrom((event.message as { usage?: { input?: number; cacheRead?: number; cacheWrite?: number; output?: number } }).usage);
+		if (tokens) {
+			state.contextTokens = tokens;
+			state.cacheIsCold = false;
+		}
+	});
+	// A compaction throws the cache away by itself, so the next switch is free.
+	pi.on("session_compact", () => {
+		state.cacheIsCold = true;
+		state.contextTokens = 0;
+	});
+
+
 	// A model the user picks is theirs for the session: pin it and stop routing over it.
 	pi.on("model_select", async (event, ctx) => {
 		if (state.routerSwitching || event.source === "restore") return;
@@ -64,7 +80,11 @@ export function routingQuestion(state: ReflexState, prompt: string): ReturnType<
 	const { tiers } = effectiveRouting(state);
 	if (Object.entries(tiers).filter(([, v]) => !!v).length < 2) return undefined;
 	if (prompt.length < 8) return undefined;
-	return buildRoutingQuestion();
+	// Name the models the user actually has, with their prices: a concrete choice beats three words.
+	const { effort } = effectiveRouting(state);
+	const described: Partial<Record<RouteTier, { ref: string; effort?: string }>> = {};
+	for (const [name, ref] of Object.entries(tiers)) if (ref) described[name as RouteTier] = { ref, effort: effort[name as RouteTier] };
+	return buildRoutingQuestion(described);
 }
 
 /** Switch the model (and the effort) for the tier Jev picked. */
@@ -78,19 +98,20 @@ export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, stat
 	const tier: RouteTier = unsure ? "default" : (answer.choice as RouteTier);
 	const target = tiers[tier] ?? tiers.default;
 	state.record("route", `${answer.choice} @ ${Math.round(answer.confidence * 100)}%${unsure ? " (unsure → default)" : ""} → ${target ?? "(unchanged)"}`);
+	// Switching may cost more than it saves: switchModel prices it and returns why it declined.
+	const kept = target ? await switchModel(pi, ctx, state, target, tier, answer.confidence) : undefined;
 	state.pending.route = logDecision({
 		source: "route",
 		model: log.model,
 		qhash: log.qhash,
-		action: target ? `switch:${tier}` : "no-tier-model",
-		rule: unsure ? "unsure-to-default" : "tier",
+		action: !target ? "no-tier-model" : kept ? `kept-for-cache:${tier}` : `switch:${tier}`,
+		rule: kept ? "cache-not-worth-losing" : unsure ? "unsure-to-default" : "tier",
 		band: confidenceBand(answer.confidence),
-		summary: `${answer.choice} → ${target ?? "(unchanged)"}`,
+		summary: `${answer.choice} → ${kept ? "(kept the current model)" : (target ?? "(unchanged)")}`,
 		signals: { tier: { primitive: "choice", value: answer.probabilities[answer.choice] ?? answer.confidence, pick: answer.choice, confidence: answer.confidence, probabilities: answer.probabilities, threshold: ROUTE_MIN_CONFIDENCE } },
-		detail: { target, effort: efforts[tier] },
+		detail: { target, effort: efforts[tier], contextTokens: state.contextTokens, keptForCache: kept },
 	});
-	if (!target) return;
-	await switchModel(pi, ctx, state, target, tier, answer.confidence);
+	if (!target || kept) return;
 	const effort = efforts[tier] ?? (tiers[tier] ? undefined : efforts.default);
 	if (effort && effort !== ctx.thinkingLevel) {
 		try {
@@ -100,15 +121,29 @@ export async function applyRouting(pi: ExtensionAPI, ctx: ExtensionContext, stat
 	}
 }
 
-async function switchModel(pi: ExtensionAPI, ctx: ExtensionContext, state: ReflexState, ref: string, tier: string, confidence: number): Promise<void> {
+async function switchModel(pi: ExtensionAPI, ctx: ExtensionContext, state: ReflexState, ref: string, tier: string, confidence: number): Promise<string | undefined> {
 	const parsed = parseModelRef(ref);
-	if (!parsed) return;
+	if (!parsed) return undefined;
 	const current = ctx.model;
-	if (current && current.provider === parsed.provider && current.id === parsed.id) return;
+	if (current && current.provider === parsed.provider && current.id === parsed.id) return undefined;
 	const model = ctx.modelRegistry.find(parsed.provider, parsed.id);
 	if (!model) {
 		if (ctx.hasUI) ctx.ui.notify(`⚡ Reflex router: model ${ref} not found`, "warning");
-		return;
+		return undefined;
+	}
+	// A switch throws away the prompt cache this session has built up. Check that it is worth it.
+	const stay = ratesOf(current && ctx.modelRegistry.find(current.provider, current.id));
+	const target = ratesOf(model);
+	// Without prices the switch cannot be judged, so it goes ahead — but the log says why, rather
+	// than leaving a gate that looks active and never fires.
+	if (!stay || !target) state.record("route", `switching to ${model.id} without pricing it: the model registry has no cost for ${!stay ? current?.id ?? "the current model" : model.id}`);
+	if (stay && target) {
+		const verdict = worthSwitching({ contextTokens: state.contextTokens, stay, target, free: state.cacheIsCold });
+		if (!verdict.switch) {
+			state.router.cacheKeeps++;
+			state.record("route", `kept ${current?.id ?? "the current model"}: ${verdict.reason}`);
+			return verdict.reason;
+		}
 	}
 	state.routerSwitching = true;
 	let ok = false;
@@ -119,6 +154,20 @@ async function switchModel(pi: ExtensionAPI, ctx: ExtensionContext, state: Refle
 	}
 	if (ok) {
 		state.router.switches++;
+		// The new model starts with nothing cached; the next turn's arithmetic must know that.
+		state.cacheIsCold = false;
 		if (ctx.hasUI) ctx.ui.notify(`⚡ Reflex routed to ${tier} tier: ${model.id} (${Math.round(confidence * 100)}%)`, "info");
 	}
+	return undefined;
+}
+
+/**
+ * Per-token rates for a model. Pi's registry quotes dollars per *million* tokens, so the numbers are
+ * scaled here — otherwise every figure in a reason is a million times too large.
+ */
+function ratesOf(model: { cost?: Partial<Rates> } | undefined): Rates | undefined {
+	const c = model?.cost;
+	if (!c || typeof c.input !== "number" || typeof c.output !== "number") return undefined;
+	const per = (n: number) => n / 1e6;
+	return { input: per(c.input), output: per(c.output), cacheRead: per(c.cacheRead ?? c.input), cacheWrite: per(c.cacheWrite ?? 0) };
 }
