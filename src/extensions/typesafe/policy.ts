@@ -411,14 +411,27 @@ export const ROUTE_TIERS = {
 	strong: "A hard or ambiguous task: subtle debugging with unclear cause, architecture or design decisions, large cross-cutting refactors, performance work, security-sensitive changes, or anything where being wrong is expensive.",
 } as const;
 
-export function buildRoutingQuestion(): ChoiceQuestion {
+/**
+ * The routing question over the models the user actually has, rather than three abstract tiers.
+ * "default" is a word Jev has to interpret; "openrouter/z-ai/glm-5.2 at medium effort, $0.60 per
+ * million in" is a thing it can weigh against the work in front of it. The option ids stay the tier
+ * names, so everything downstream is unchanged.
+ */
+export function buildRoutingQuestion(models?: Partial<Record<keyof typeof ROUTE_TIERS, { ref: string; effort?: string; inputPerMillion?: number }>>): ChoiceQuestion {
+	const criteria: Record<string, string> = {};
+	for (const [tier, description] of Object.entries(ROUTE_TIERS)) {
+		const m = models?.[tier as keyof typeof ROUTE_TIERS];
+		criteria[tier] = m
+			? `${m.ref}${m.effort ? ` at ${m.effort} effort` : ""}${m.inputPerMillion ? ` (about $${m.inputPerMillion.toFixed(2)} per million input tokens)` : ""}. ${description}`
+			: description;
+	}
 	return choice(
 		{
 			question: "Which tier of language model does the work this request asks for need to be done well? A short reply such as 'yes', 'good point', 'go ahead' or 'fix it' continues the task in recent_context: judge that task, not the length of the reply.",
 			inspect: ["request", "recent_context", "project_hint"],
 			fallback: "Prefer default when unsure",
 		},
-		ROUTE_TIERS,
+		criteria,
 	);
 }
 

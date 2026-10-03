@@ -41,7 +41,8 @@ function setup(tier: "fast" | "default" | "strong" = "fast", confidence = 0.9) {
 		get model() {
 			return current;
 		},
-		modelRegistry: { find: (provider: string, id: string) => ({ provider, id }) },
+		// Rates matter now: a switch is priced against the prompt cache it would throw away.
+		modelRegistry: { find: (provider: string, id: string) => ({ provider, id, cost: { input: 1e-6, output: 4e-6, cacheRead: 1e-7, cacheWrite: 1.2e-6 } }) },
 		ui: { setStatus() {}, notify() {} },
 	};
 	const pi = {
@@ -103,4 +104,25 @@ test("an unsure answer routes to the default tier instead of leaving the last mo
 	await s.prompt("good point, go ahead");
 	assert.deepEqual(s.switched, ["or/default-saved"]);
 	assert.ok((s.seenStates[0] as { recent_context?: string }).recent_context, "the router is told what the request continues");
+});
+
+test("mid-session, a switch that costs more than it saves is declined and said so", async () => {
+	const s = setup("fast");
+	await s.prompt();
+	assert.deepEqual(s.switched, ["or/fast-saved"], "the first turn of a session is free: nothing is cached yet");
+
+	// Now the session has built up context on that model, and the tier points somewhere else.
+	s.state.config.reflex.routing.fast = "or/fast-other";
+	s.state.contextTokens = 200000;
+	s.state.cacheIsCold = false;
+	const before = s.switched.length;
+	await s.prompt("and now something a little different");
+	assert.equal(s.switched.length, before, "re-reading 200k tokens is not worth it");
+	assert.equal(s.state.router.cacheKeeps, 1);
+	assert.match(s.state.log.map((l) => l.summary).join(" "), /kept .*would cost \$/);
+
+	// A compaction throws the cache away anyway, so the next switch is free again.
+	s.state.cacheIsCold = true;
+	await s.prompt("carry on with the next part");
+	assert.ok(s.switched.length > before, "after compaction there is nothing to lose");
 });
