@@ -71,6 +71,10 @@ export class ReflexState {
 	contextTokens = 0;
 	/** True at the start of a session and just after a compaction: there is no cache to lose. */
 	cacheIsCold = true;
+	/** The last few command failures of this task, so a repeat can be recognised. */
+	recentFailures: string[] = [];
+	/** How many times the same failure has come back in a row. */
+	repeatedFailures = 0;
 	readonly router: RouterStats = { decisions: 0, switches: 0, cacheKeeps: 0, byTier: {} };
 	/**
 	 * Routing for this session only (never saved): a model the user picked, which pauses routing,

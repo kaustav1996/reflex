@@ -216,6 +216,42 @@ export function buildPruneQuestions(ids: string[]): Record<string, NoulQuestion>
 /** At or above this the result stays. Low, for the same reason as trimming: losing something needed costs more. */
 export const PRUNE_KEEP_THRESHOLD = 0.4;
 
+/**
+ * A command just failed. Before the model spends a turn reading the output and guessing, ask what
+ * kind of failure it is and whether it is the same one as last time — both in one request.
+ *
+ * The categories are the ones where code can do something useful. Anything else is "real bug",
+ * which means: say nothing, and let the model work as it would have.
+ */
+export const FAILURE_KINDS = {
+	missing_dependency: "A program, package, module or binary the command needs is not installed or not on PATH: command not found, no such module, cannot find package.",
+	transient: "A failure that may pass on its own: a network timeout, a rate limit, a lock held by another process, a flaky test that passes on a retry.",
+	environment: "Configuration or credentials, not code: a missing environment variable, an expired token, a wrong path, a service that isn't running, permission denied.",
+	real_bug: "Something in the code or the command itself is wrong: a failing assertion, a type error, a syntax error, a genuine logic failure.",
+} as const;
+
+export function buildTriageQuestions(): { kind: ChoiceQuestion; repeat: NoulQuestion } {
+	return {
+		kind: choice({ question: "What kind of failure does output describe?", inspect: ["output", "command"], fallback: "Prefer real_bug when unsure" }, FAILURE_KINDS),
+		repeat: noul({
+			question: "Is this the same failure as earlier_failures, rather than a new one?",
+			inspect: ["output", "earlier_failures"],
+			note: "The same underlying cause counts even when the wording, line numbers or counts differ.",
+		}),
+	};
+}
+
+/** Below this confidence the category is not acted on: the model reads the output as usual. */
+export const TRIAGE_MIN_CONFIDENCE = 0.6;
+/**
+ * At or above this, the failure is treated as one already seen. Measured over eight pairs: a genuine
+ * repeat scores 65–97% (the low end being the same assertion with a different number), an unrelated
+ * failure 3–16%. 0.4 sits in the gap, well clear of both.
+ */
+export const TRIAGE_REPEAT = 0.4;
+/** The same failure this many times in a row is worth stopping over. */
+export const TRIAGE_MAX_REPEATS = 3;
+
 /** At or above this a chunk is kept. Low on purpose: dropping something needed costs far more than keeping noise. */
 export const TRIM_KEEP_THRESHOLD = 0.35;
 
