@@ -94,6 +94,11 @@ export interface ReflexPolicyConfig {
 	selectTools?: boolean;
 	/** Categorise a failed command before the model spends a turn reading the output. */
 	triageFailures?: boolean;
+	/**
+	 * Name the file a task probably starts in. Off by default: measured right about three times in
+	 * four when it speaks, and it only speaks on about a third of tasks.
+	 */
+	fileHints?: boolean;
 }
 
 export interface ReflexConfig {

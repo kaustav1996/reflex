@@ -24,7 +24,7 @@ import { getReflexHome } from "../config.js";
 import { maskSecrets } from "./calls.js";
 
 /** Where in Reflex the decision was made. */
-export type DecisionSource = "gate" | "route" | "select" | "monitor" | "completion" | "screen" | "trim" | "prune" | "triage" | "voice" | "workflow" | "secrets" | "hook" | "share";
+export type DecisionSource = "gate" | "route" | "select" | "monitor" | "completion" | "screen" | "trim" | "prune" | "triage" | "files" | "voice" | "workflow" | "secrets" | "hook" | "share";
 
 /** One answer, with the primitive that produced it: never compare across primitives. */
 export interface DecisionSignal {

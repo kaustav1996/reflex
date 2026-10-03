@@ -21,6 +21,7 @@ import { applyRouting, routingQuestion } from "./router.js";
 import { applySelection, selectionQuestions } from "./selector.js";
 import type { ReflexState } from "./state.js";
 import { heldBackNote, planTools } from "./tools.js";
+import { fileHint } from "./filehints.js";
 import { logDecision } from "../../logs/decisions.js";
 
 /**
@@ -95,9 +96,12 @@ export function registerRequestBrief(pi: ExtensionAPI, state: ReflexState): void
 				return Object.fromEntries(names.map((n) => [n, (second.answers[n] as { noul: number } | undefined)?.noul ?? 0]));
 			};
 			const relevance = await applySelection(state, { skill: answers.skill, skill_needed: answers.skill_needed as unknown as { noul: number } | undefined, connector: answers.connector }, selection, { ...log, fit });
+			// Off unless asked for: measured right about three times in four, on a third of tasks.
+			const files = await fileHint(state, prompt, ctx.cwd);
 			// The connector answer also decides which tool definitions this request carries.
 			const note = applyToolPlan(pi, state, answers.connector?.choice);
-			const message = relevance ? { customType: "reflex-relevance", content: relevance, display: true } : undefined;
+			const content = [relevance, files].filter(Boolean).join(" ");
+			const message = content ? { customType: "reflex-relevance", content, display: true } : undefined;
 			return { ...(message ? { message } : {}), ...(note ? { systemPrompt: `${event.systemPrompt}${note}` } : {}) };
 		} catch (err) {
 			state.degradedReason = err instanceof Error ? err.message : String(err);
