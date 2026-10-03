@@ -241,6 +241,26 @@ export function buildTriageQuestions(): { kind: ChoiceQuestion; repeat: NoulQues
 	};
 }
 
+/**
+ * Which file a task is about: a Choice over the shortlist, with a "none" escape.
+ *
+ * Measured by replaying this repo's own commits (the subject as the task, the files it changed as
+ * the answer, judged against the tree *before* the commit so a file it created can't be expected):
+ * a noul per file was right about half the time it spoke; this Choice is right 3 times in 4 above
+ * 60% confidence, but only speaks on about a third of tasks. That is why file hints are off unless
+ * asked for — a wrong hint anchors the model on the wrong file, which is worse than silence.
+ */
+export function buildFileChoiceQuestion(criteria: Record<string, string>): ChoiceQuestion {
+	return choice(
+		{
+			question: "Which of these files would the assistant most likely need to open to carry out task? Pick none when the work belongs somewhere not listed.",
+			inspect: "task",
+			fallback: "Prefer none when unsure",
+		},
+		{ none: "None of these files is where this work belongs.", ...criteria },
+	);
+}
+
 /** Below this confidence the category is not acted on: the model reads the output as usual. */
 export const TRIAGE_MIN_CONFIDENCE = 0.6;
 /**
