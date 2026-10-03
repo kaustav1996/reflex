@@ -92,6 +92,8 @@ export interface ReflexPolicyConfig {
 	pruneContext?: boolean;
 	/** Carry only the connector tools a request needs; the rest come back on demand. */
 	selectTools?: boolean;
+	/** Categorise a failed command before the model spends a turn reading the output. */
+	triageFailures?: boolean;
 }
 
 export interface ReflexConfig {
@@ -143,6 +145,7 @@ export const DEFAULT_CONFIG: ReflexConfig = {
 		trimToolOutput: true,
 		pruneContext: true,
 		selectTools: true,
+		triageFailures: true,
 	},
 	llm: { provider: "openrouter", model: "anthropic/claude-sonnet-4.6" },
 	ui: { theme: "typesafe" },

@@ -15,6 +15,7 @@ import { registerScreen } from "./screen.js";
 import { registerOutcomes } from "./outcomes.js";
 import { registerTrimmer } from "./trimmer.js";
 import { registerPruner } from "./pruner.js";
+import { registerTriage } from "./triage.js";
 import { ReflexState } from "./state.js";
 
 export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI) => ReflexState {
@@ -68,6 +69,8 @@ export function createTypesafeExtension(config: ReflexConfig): (pi: ExtensionAPI
 		registerTrimmer(pi, state);
 		// A long session is mostly stale tool output: prune it rather than paraphrase it.
 		registerPruner(pi, state);
+		// A failed command: say what kind of failure it is before the model spends a turn guessing.
+		registerTriage(pi, state);
 
 		pi.on("session_start", async (_e, ctx) => {
 			applyFlag();
