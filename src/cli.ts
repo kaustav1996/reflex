@@ -163,6 +163,48 @@ async function run(): Promise<void> {
 		return;
 	}
 
+	// What the reflex layer saved, net of what Jev cost, and whether its numbers mean what they say.
+	if (sub === "savings" || sub === "calibration") {
+		const rest = args.slice(1);
+		const flag = (name: string) => {
+			const i = rest.indexOf(name);
+			return i >= 0 ? rest[i + 1] : undefined;
+		};
+		const days = Number(flag("--days") ?? 30);
+		const since = Date.now() - days * 24 * 60 * 60 * 1000;
+		const { calibrationReport, savingsReport } = await import("./logs/report.js");
+		const { loadModelRates } = await import("./logs/rates.js");
+		const usd = (n: number) => `$${n.toFixed(4)}`;
+		if (sub === "savings") {
+			const { rates, defaultModel } = loadModelRates();
+			const r = savingsReport({ rates, defaultModel, since });
+			console.log(`last ${days} days${r.from ? ` · ${new Date(r.from).toISOString().slice(0, 10)} → ${new Date(r.to ?? Date.now()).toISOString().slice(0, 10)}` : ""}\n`);
+			console.log(`routing      ${String(r.routing.turns).padStart(5)} routed turns · spent ${usd(r.routing.spent)} · at the default tier ${usd(r.routing.atDefault)} · difference ${usd(r.routing.difference)}`);
+			console.log(`  (context)  ${String(r.allTurns.calls).padStart(5)} model calls · spent ${usd(r.allTurns.spent)} · all at the default tier ${usd(r.allTurns.atDefault)} · difference ${usd(r.allTurns.difference)} — however the model was chosen, not routing's doing`);
+			console.log(`trimming     ${String(r.trimming.calls).padStart(5)} results    · ${r.trimming.tokens} tokens removed (${usd(r.trimming.usd)})`);
+			console.log(`pruning      ${String(r.pruning.calls).padStart(5)} requests   · ${r.pruning.tokens} tokens left out (${usd(r.pruning.usd)})`);
+			console.log(`gate         ${String(r.gate.allowed).padStart(5)} allowed    · ${r.gate.asked} asked · ${r.gate.blocked} blocked`);
+			console.log(`triage       ${String(r.triage.hints).padStart(5)} hints      · ${r.triage.stops} loops stopped`);
+			console.log(`screening    ${String(r.screening.marked).padStart(5)} marked as data`);
+			console.log(`tools        ${String(r.tools.requests).padStart(5)} requests   · ${r.tools.toolsLeftOut} connectors left out`);
+			console.log(`jev          ${String(r.jev.calls).padStart(5)} calls      · ${r.jev.inputTokens} input tokens · ${usd(r.jev.usd)}${r.jev.estimated ? " (estimated)" : ""}`);
+			console.log(`\nnet          ${usd(r.net)}  (price difference + tokens removed − what Jev cost)`);
+			if (r.notes.length) console.log(`\n${r.notes.map((n) => `· ${n}`).join("\n")}`);
+			return;
+		}
+		const c = calibrationReport({ since, minSamples: Number(flag("--min") ?? 1) });
+		console.log(`${c.total} decisions in the last ${days} days\n`);
+		for (const q of c.questions.filter((x) => x.withOutcome > 0)) {
+			console.log(`${q.source}/${q.signal}${q.threshold === undefined ? "" : ` (threshold ${q.threshold})`} — ${q.withOutcome} of ${q.n} have an outcome`);
+			for (const b of q.buckets.filter((x) => x.n)) console.log(`   ${b.range.padEnd(9)} ${String(b.n).padStart(4)} decisions${b.withOutcome ? ` · ${b.borneOut}/${b.withOutcome} borne out${b.rate === undefined ? "" : ` (${Math.round(b.rate * 100)}%)`}` : ""}`);
+			console.log(`   outcomes: ${Object.entries(q.outcomes).map(([k, v]) => `${k} ${v}`).join(", ") || "none yet"}`);
+		}
+		const quiet = c.questions.filter((x) => !x.withOutcome);
+		if (quiet.length) console.log(`\n${quiet.length} questions have decisions but no outcomes yet: ${[...new Set(quiet.map((q) => `${q.source}/${q.signal}`))].slice(0, 8).join(", ")}`);
+		if (!c.total) console.log("Nothing logged yet. Use Reflex for a while and come back.");
+		return;
+	}
+
 	// The labelled gate set: replay recorded answers (free, offline) or ask Jev now (needs a key).
 	if (sub === "eval") {
 		const rest = args.slice(1);
@@ -308,6 +350,8 @@ Usage:
   reflex agent run <id> --trial               trial run: external steps are reported, not run
   reflex agent export <id> | import <file>     share an agent as a .reflex-agent.json; import opens a review session
   reflex decisions [--source gate] [--limit 40]  every Jev decision: its numbers, what code did, what came of it
+  reflex savings [--days 30]                   what the reflex layer saved, net of what Jev cost
+  reflex calibration [--days 30]               how often each question's decisions were borne out
   reflex eval [--live] [--repeats 2] [--split test]  the labelled gate set: accuracy, held-out split, noise
   reflex eval <your-eval.json>                 run your own eval (cases, runner, grader; see skill reflex-evals)
   reflex hillclimb <your-eval.json> --surface prompts/system.md [--notes "how the file is used"]

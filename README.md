@@ -321,6 +321,26 @@ the files you nominated, re-runs and decides in code: keep only when the held-ou
 revert a train-only gain as overfitting, revert any patch that copied case text into a prompt, and
 restore the files on every revert.
 
+### Savings and calibration
+
+Settings → Savings & calibration, or:
+
+```bash
+reflex savings --days 30        # what the layer saved, net of what Jev cost
+reflex calibration --days 30    # how often each question's decisions were borne out
+```
+
+Both read what is already on disk. Every figure says where it comes from, because a savings report
+is the easiest thing here to quietly inflate: routing is credited only for the turns it actually
+chose (everything else is shown separately, as context); trimmed and pruned tokens are counted once
+even though the same output would have been re-read on every later turn; and Jev's own cost is
+subtracted, estimated from input tokens when the provider reports no price.
+
+Calibration groups decisions by question and by how sure the answer was. A question worth its
+threshold is borne out more often in its high buckets than its low ones; a flat profile means the
+number carries no information, whatever its average looks like. An outcome is only counted against
+the questions it actually speaks about — a skill being read says nothing about a connector choice.
+
 ### Decision log
 
 The call log says what was asked and answered. `~/.reflex/logs/decisions.jsonl` says what was

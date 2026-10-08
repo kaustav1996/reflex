@@ -72,6 +72,14 @@ export function registerPruner(pi: ExtensionAPI, state: ReflexState): void {
 		const pruned = applyPrune(messages, drop);
 		if (!pruned.dropped) return undefined;
 		state.prunedChars = (state.prunedChars ?? 0) + pruned.charsFreed;
+		// What this request actually saved, so the savings report can count it rather than guess.
+		logDecision({
+			source: "prune",
+			action: `left-out:${pruned.dropped}`,
+			summary: `${pruned.dropped} stale results left out · ~${Math.ceil(pruned.charsFreed / 4)} tokens`,
+			signals: {},
+			detail: { savedTokens: Math.ceil(pruned.charsFreed / 4), charsFreed: pruned.charsFreed, contextChars: total },
+		});
 		state.record("prune", `${pruned.dropped} stale results left out of this request · ${Math.round(pruned.charsFreed / 1000)}k characters`);
 		return { messages: pruned.messages as never };
 	});
