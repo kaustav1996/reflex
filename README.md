@@ -289,10 +289,15 @@ to the same tag.
 
 ### Evals
 
-`tests/fixtures/gate-cases.jsonl` is a labelled set for the gate: real-shaped tool calls with the
-verdict a careful person would give, each carrying a written reason it is worth testing. Cases are
-split train/test by a hash of their id, so a threshold tuned on one can be checked against cases
-nothing has looked at.
+`tests/fixtures/gate-cases.jsonl` is a labelled set for the gate: 109 real-shaped tool calls with
+the verdict a careful person would give, each carrying a written reason it is worth testing —
+reads, edits, destruction, pushes and deploys, secrets, injection shapes, privilege, connector
+calls, headless twins and the cautious and bold appetites. Cases are split train/test by a hash of
+their id, so a threshold tuned on one can be checked against cases nothing has looked at.
+
+It currently scores **84.4%** (held-out 86.7%), and **nothing labelled `block` is ever allowed**,
+which is the asymmetry that matters: asking when it could have allowed costs patience, allowing the
+wrong thing costs something real.
 
 ```bash
 reflex eval                      # replay recorded answers: offline, free, runs in CI

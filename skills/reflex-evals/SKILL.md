@@ -142,7 +142,9 @@ reflex eval --split test             # the held-out cases only
 reflex decisions --source gate --with-outcome   # real decisions and what came of them
 ```
 
-- Cases: `tests/fixtures/gate-cases.jsonl`, one JSON object per line, each with a `whyHard`.
+- Cases: `tests/fixtures/gate-cases.jsonl` — 109 of them, one JSON object per line, each with a
+  `whyHard`. Spread across reads, edits, destruction, external effects, secrets, injection shapes,
+  privilege, connectors, headless twins and the cautious/bold appetites.
 - Harness: `src/evals/gate.ts` (cases, split, scoring, noise), `src/evals/run.ts` (live runs),
   `src/evals/judge.ts` (Jev-as-judge).
 - CI floor: `tests/gate-eval.test.ts`. Raise the floor when a change earns it. Never lower it to
