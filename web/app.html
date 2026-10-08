@@ -1836,7 +1836,7 @@ function paintRun(v) {
 // ── settings ─────────────────────────────────────────────────────────────
 async function loadSettings() {
   const d = await api("/api/settings"); state.settings = d; const c = d.config;
-  const PAGES = { system2: "System 2 · LLM", system1: "System 1 · Reflex", voice: "Voice", browser: "Browser agent", look: "Look", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", hooks: "Hooks", logs: "Logs" };
+  const PAGES = { system2: "System 2 · LLM", system1: "System 1 · Reflex", voice: "Voice", browser: "Browser agent", look: "Look", artifacts: "Artifacts", packages: "Packages", skills: "Skills", connectors: "Connectors", hooks: "Hooks", logs: "Logs", calibration: "Savings & calibration" };
   if (state.settingsPage === "keys" || state.settingsPage === "llm") state.settingsPage = "system2"; if (state.settingsPage === "reflex") state.settingsPage = "system1";
   if (!PAGES[state.settingsPage]) state.settingsPage = "system2";
   const nav = $("#settingsNav"); nav.innerHTML = Object.entries(PAGES).map(([k, label]) => `<div class="sess" data-k="${k}">${label}</div>`).join("");
@@ -1865,6 +1865,14 @@ async function loadSettings() {
     <div class="card" id="s-artifacts"><h3>Artifact defaults</h3><div class="hint">Every artifact deploys with these unless it sets its own domain, region or repo visibility on its page (Artifacts tab).</div><div id="artSettingsBody"></div></div>
     <div class="card" id="s-hooks"><h3>Hooks</h3><div class="hint">When a session does X, run Y. A hook fires on a session event, optionally narrowed by a matcher and by a TypeSafe yes/no question, and then starts one of your workflow agents or runs a shell command. Each firing shows in the session as a <b>hook</b> line and in Logs. These are your global hooks (every project); a project can add its own in <code>.reflex/hooks.json</code>, which stay off until you approve that file in a session.</div><div id="hooksBody"></div></div>
     <div class="card" id="s-logs"><h3>Call logs</h3><div class="hint">Every TypeSafe (Jev) request with its state, questions and answers; every LLM response with tokens and cost; voice transcriptions; browser-agent steps. From all sessions and agent runs on this machine (~/.reflex/logs/calls.jsonl). Secrets are masked before writing: known keys as <code>[SECRET:NAME]</code>, anything that looks like a credential as <code>[SECRET:#hash]</code>.</div><div id="logsBody"></div></div>
+    <div class="card" id="s-calibration"><h3>What the reflex layer saved, and whether its numbers hold up</h3>
+      <div class="hint">Both read what is already on disk: the call log (tokens and cost of every request) and the decision log (every decision, the probability each threshold was compared against, and what came of it). Nothing is recorded for this page. Figures say where they come from, because a savings report is the easiest thing here to quietly inflate.</div>
+      <div class="rowbtns" style="margin-top:10px"><label class="muted">period</label><select id="calDays"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></div>
+      <div id="savingsBody"><span class="hint">loading…</span></div>
+      <h3 style="margin-top:18px">Calibration</h3>
+      <div class="hint">For each question, how often the decisions it drove were borne out, split by how sure it was. A question worth its threshold is right more often in its high buckets than its low ones; a flat profile means the number carries no information, whatever its average looks like.</div>
+      <div id="calBody"><span class="hint">loading…</span></div></div>
+
     <div class="card" id="s-packages"><h3>Packages (Pi extensions, skills, prompts, themes)</h3>
       ${(() => { const src = ECC_SOURCE, on = (d.packages || []).some(p => String(typeof p === "string" ? p : p.source).includes("affaan-m/ECC")); return `<div class="rec-card"><div class="rec-head"><b>ECC</b> <span class="conn-src">recommended</span> <a href="https://github.com/affaan-m/ECC" target="_blank">github.com/affaan-m/ECC ↗</a><span style="flex:1"></span>${on ? `<span class="b small" style="cursor:default">✓ installed</span><button class="b small" id="eccPick">choose skills</button><button class="b small" data-ecc="remove">remove</button>` : `<button class="b small primary" data-ecc="none" title="installs everything, then loads no skills until you pick them in Skills">install · pick skills</button><button class="b small" data-ecc="all">install · all 292 skills</button>`}</div>
         <div class="hint">Skills, commands, rules and session hooks for coding agents, installed as a Pi package: 292 skills and 94 commands (<code>/skill:&lt;name&gt;</code>, <code>/&lt;command&gt;</code>), and ECC's engineering rules added to every prompt. Its MCP servers are separate cards under <b>Connectors</b> (filter <b>ECC</b>); each stays off until you connect it.</div>
@@ -1891,6 +1899,7 @@ async function loadSettings() {
   state.artCfg = d.artifacts; state.artDefaults = d.artifactDefaults || {};
   $("#artSettingsBody").innerHTML = artifactSetup(d.artifacts, true); wireArtifactSetup($("#artSettingsBody"));
   drawLogs();
+  drawCalibration();
   const mcpFromForm = () => { const name = $("#mName").value.trim(); const cmd = $("#mCmd").value.trim(); const url = $("#mUrl").value.trim(); const kv = Object.fromEntries($("#mEnv").value.split(/\s+(?=[A-Za-z_][A-Za-z0-9_-]*=)/).filter(Boolean).map(p => { const i = p.indexOf("="); return [p.slice(0, i), p.slice(i + 1)]; }));
     if (!name || (!cmd && !url)) throw new Error("name and a command or URL are required");
     const server = cmd ? { command: cmd.split(/\s+/)[0], args: cmd.split(/\s+/).slice(1), env: kv } : { url, headers: kv }; return { name, server }; };
@@ -2391,6 +2400,43 @@ async function drawLogs() {
 const CONFIG_PAGES = ["system2", "system1", "voice", "browser", "look"];
 // A page can show several cards: System 2 is keys + sign-in + endpoints + the default model.
 const PAGE_CARDS = { system2: ["s-keys", "s-llm", "s-default"], system1: ["s-reflex"] };
+const usd4 = n => `$${(n ?? 0).toFixed(4)}`;
+/** The savings report and the calibration profile, both from logs already on disk. */
+async function drawCalibration() {
+  const days = Number($("#calDays")?.value ?? 30);
+  const sv = $("#savingsBody"), cb = $("#calBody");
+  if (!sv || !cb) return;
+  $("#calDays").onchange = drawCalibration;
+  try {
+    const r = await api(`/api/savings?days=${days}`);
+    const row = (label, value, note) => `<tr><td style="padding:2px 14px 2px 0">${esc(label)}</td><td style="text-align:right">${esc(value)}</td><td class="muted" style="padding-left:14px">${note ?? ""}</td></tr>`;
+    sv.innerHTML = `<table style="font-size:12px;margin-top:8px">
+      ${row("routing", usd4(r.routing.difference), `${r.routing.turns} turns routing chose · spent ${usd4(r.routing.spent)} vs ${usd4(r.routing.atDefault)} at the default tier`)}
+      ${row("every model call", usd4(r.allTurns.difference), `${r.allTurns.calls} calls re-priced the same way — however the model was chosen, so not routing's doing`)}
+      ${row("trimming", usd4(r.trimming.usd), `${r.trimming.tokens.toLocaleString()} tokens removed from ${r.trimming.calls} results`)}
+      ${row("pruning", usd4(r.pruning.usd), `${r.pruning.tokens.toLocaleString()} tokens left out of ${r.pruning.calls} requests`)}
+      ${row("gate", `${r.gate.allowed} / ${r.gate.asked} / ${r.gate.blocked}`, "allowed without asking / asked / blocked")}
+      ${row("triage", `${r.triage.hints} / ${r.triage.stops}`, "failures named / loops stopped")}
+      ${row("screening", String(r.screening.marked), "results marked as data")}
+      ${row("tools", String(r.tools.toolsLeftOut), `connectors left out across ${r.tools.requests} requests`)}
+      ${row("jev", `− ${usd4(r.jev.usd)}`, `${r.jev.calls} calls · ${r.jev.inputTokens.toLocaleString()} input tokens${r.jev.estimated ? " · estimated" : ""}`)}
+      <tr><td style="padding-top:8px"><b>net</b></td><td style="text-align:right;padding-top:8px"><b>${usd4(r.net)}</b></td><td class="muted" style="padding-left:14px;padding-top:8px">price difference + tokens removed − what Jev cost</td></tr>
+    </table>${r.notes.length ? `<div class="hint" style="margin-top:10px">${r.notes.map(n => `· ${esc(n)}`).join("<br>")}</div>` : ""}`;
+  } catch (e) { sv.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+  try {
+    const c = await api(`/api/calibration?days=${days}`);
+    const scored = c.questions.filter(q => q.withOutcome > 0);
+    if (!c.total) { cb.innerHTML = `<div class="hint" style="margin-top:8px">Nothing logged in this period yet.</div>`; return; }
+    cb.innerHTML = `${scored.map(q => `<div style="margin-top:12px"><b>${esc(q.source)}/${esc(q.signal)}</b>${q.threshold === undefined ? "" : ` <span class="muted">threshold ${q.threshold}</span>`} <span class="muted">— ${q.withOutcome} of ${q.n} have an outcome</span>
+      <table style="font-size:12px;margin-top:4px">${q.buckets.filter(b => b.n).map(b => {
+        const w = b.rate === undefined ? 0 : Math.round(b.rate * 100);
+        return `<tr><td style="padding-right:12px">${b.range}</td><td style="padding-right:12px">${b.n}</td><td style="width:140px">${b.withOutcome ? `<span style="display:inline-block;height:9px;width:${w}%;background:var(--magenta)"></span>` : ""}</td><td class="muted">${b.withOutcome ? `${b.borneOut}/${b.withOutcome} borne out${b.rate === undefined ? "" : ` (${w}%)`}` : "no outcomes yet"}</td></tr>`;
+      }).join("")}</table>
+      <div class="muted" style="font-size:11px">${Object.entries(q.outcomes).map(([k, v]) => `${esc(k)} ${v}`).join(" · ") || "none yet"}</div></div>`).join("")}
+      ${c.withoutOutcomes.length ? `<div class="hint" style="margin-top:14px">Decisions with nothing to measure them yet: ${c.withoutOutcomes.map(x => `${esc(x.source)} ${x.n}`).join(", ")}.</div>` : ""}
+      ${scored.length ? "" : `<div class="hint" style="margin-top:8px">No question has outcomes in this period yet. Outcomes arrive when you answer a gate question, when a suggested skill is read or ignored, or when a verification runs.</div>`}`;
+  } catch (e) { cb.innerHTML = `<div class="notice error">${esc(e.message)}</div>`; }
+}
 function showSettingsPage(k) {
   state.settingsPage = k;
   $("#settingsNav").querySelectorAll(".sess").forEach(el => el.classList.toggle("active", el.dataset.k === k));
