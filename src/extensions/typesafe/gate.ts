@@ -98,7 +98,7 @@ export function protectedPathHit(action: ActionDescription, patterns: string[]):
 	return undefined;
 }
 
-/** Fallback heuristics when Jev is unreachable: keep the agent moving but never silently run the scary stuff. */
+/** Known-dangerous patterns used to explain fallback confirmation requests. */
 const DANGEROUS_PATTERNS = [
 	/\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|--recursive)\b/i,
 	/\bsudo\b/,
@@ -322,17 +322,18 @@ export function isReadOnlyCommand(action: ActionDescription): boolean {
 	return [...subs].some((sub) => first.startsWith(`${program} ${sub}`) && !/\s-(f|D|d)\b|--force|--delete/.test(rest.join(" ")));
 }
 
+/** Without a Jev judgment, every unapproved gated action needs confirmation. */
 async function fallback(ctx: ExtensionContext, action: ActionDescription, protectedHit: string | undefined, state: ReflexState, note: string) {
 	const cmd = action.tool === "bash" ? String(action.detail.command ?? "") : "";
 	const dangerous = DANGEROUS_PATTERNS.some((p) => p.test(cmd));
-	state.record("gate", `${protectedHit || dangerous ? "ask" : "allow"} ${action.tool}: ${action.summary} [fallback rules — ${note}]`);
+	const reason = protectedHit ? `protected path: ${protectedHit}` : dangerous ? "matches a dangerous command pattern" : "Jev could not judge this action; confirmation required";
+	state.record("gate", `ask ${action.tool}: ${action.summary} [fallback rules — ${note}]`);
 	updateStatus(ctx, state);
-	if (!protectedHit && !dangerous) return undefined;
 	if (!ctx.hasUI) {
 		state.gate.blocked++;
-		return { block: true, reason: `Blocked by Reflex fallback rules (${protectedHit ? `protected path ${protectedHit}` : "dangerous command pattern"}); ${note}.` };
+		return { block: true, reason: `Blocked by Reflex fallback rules (${reason}); ${note}.` };
 	}
-	const answer = await askUser(ctx, action, undefined, `${protectedHit ? `protected path: ${protectedHit}. ` : "matches a dangerous command pattern. "}(${note})`, state);
+	const answer = await askUser(ctx, action, undefined, `${reason}. (${note})`, state);
 	if (answer.remember) state.sessionAllow.add(sessionKey(action));
 	return answer.block ? { block: true, reason: answer.reason } : undefined;
 }

@@ -57,8 +57,8 @@ These keep Jev useful and keep the agent safe:
 3. **Pass state as an object**, not as a prompt string.
 4. **Never let Jev alone allow a destructive action.** Protected paths and dangerous commands are
    decided by deterministic code.
-5. **Fail safe.** If Jev errors or times out, new code asks rather than allows. (The gate's current
-   fallback still allows commands that match no dangerous pattern; roadmap item 0.1 fixes that.)
+5. **Fail safe.** If Jev errors or times out, ask rather than allow. The gate requires confirmation
+   for unapproved actions when Jev is unavailable, and blocks them if no UI is available.
 6. **Log it.** Every Jev call goes through `client.ts`, which writes to the call log with secrets
    masked. Don't call the API around it.
 
