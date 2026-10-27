@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,6 +11,12 @@ const { deleteGlobalHook, defaultAgentInput, listGlobalHooks, loadHooks, matches
 const { executeHook, hookEnv } = await import("../src/hooks/run.ts");
 
 const base = { cwd: "/work/app", session: "s1" };
+
+function secretBlockingHook() {
+	const { hooks } = JSON.parse(readFileSync(new URL("../docs/examples/hooks/block-secret-commits.json", import.meta.url), "utf8"));
+	assert.equal(hooks.length, 1);
+	return validateHook(hooks[0]);
+}
 
 test("a hook needs a known event and exactly one action; regexes are checked", () => {
 	assert.equal(validateHook({ id: "Report On Stop", event: "agent_end", run: { agent: "report" } }).id, "report-on-stop");
@@ -35,6 +42,68 @@ test("matching: event, tool (name, list, glob), command regex, path glob, prompt
 	assert.ok(matches(h({ error: true }, "after_tool"), { ...base, event: "after_tool", tool: "bash", isError: true }));
 	assert.ok(!matches(h({ error: true }, "after_tool"), { ...base, event: "after_tool", tool: "bash", isError: false }));
 	assert.ok(!matches({ ...h({}), enabled: false }, bash));
+});
+
+test("the secret-blocking example validates and matches bash commits", () => {
+	const hook = secretBlockingHook();
+	assert.equal(hook.id, "block-secret-commits");
+	const payload = { ...base, event: "before_tool" as const, tool: "bash" };
+	assert.ok(matches(hook, { ...payload, command: 'git commit -m "x"' }));
+	assert.ok(matches(hook, { ...payload, command: "git -C /work/app commit -m x" }));
+	assert.ok(matches(hook, { ...payload, command: '/usr/bin/git commit -m "x"' }));
+	assert.ok(matches(hook, { ...payload, command: 'GIT_DIR=/tmp/repo.git git commit -m "x"' }));
+	assert.ok(matches(hook, { ...payload, command: 'GIT_DIR=/tmp/repo.git GIT_WORK_TREE=/tmp/wt git commit -m "x"' }));
+	assert.ok(!matches(hook, { ...payload, command: "git push origin main" }));
+	assert.ok(!matches(hook, { ...payload, command: "git status" }));
+	assert.ok(!matches(hook, { ...payload, command: "git commit-tree" }));
+	assert.ok(!matches(hook, { ...payload, command: 'sudo git commit -m "x"' }));
+	assert.ok(!matches(hook, { ...payload, command: 'env GIT_DIR=/tmp/repo.git git commit -m "x"' }));
+	assert.ok(!matches(hook, { ...payload, tool: "edit", command: 'git commit -m "x"' }));
+	assert.ok(!matches(hook, { ...payload, event: "after_tool", command: 'git commit -m "x"' }));
+});
+
+test("the secret-blocking example checks staged additions without echoing credentials", async (t) => {
+	const hook = secretBlockingHook();
+	const cwd = mkdtempSync(join(tmpdir(), "reflex-secret-hook-"));
+	t.after(() => rmSync(cwd, { recursive: true, force: true }));
+	const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+	git("init", "-q");
+	const githubToken = `ghp_${"A1".repeat(18)}`;
+	const initial = `existing=${githubToken}\n`;
+	writeFileSync(join(cwd, "fixture.txt"), initial);
+	git("add", "fixture.txt");
+	const commit = git("-c", "user.name=Hook test", "-c", "user.email=hooks@example.invalid", "commit-tree", git("write-tree"), "-m", "fixture");
+	git("update-ref", "HEAD", commit);
+
+	const credentials = [
+		...["", "RSA ", "EC ", "DSA ", "OPENSSH ", "ENCRYPTED "].map((kind) => [`${kind || "PKCS8 "}private key`, `-----BEGIN ${kind}PRIVATE KEY-----`]),
+		["AWS access key", `AKIA${"A1".repeat(8)}`],
+		["AWS temporary access key", `ASIA${"A1".repeat(8)}`],
+		["legacy sk key", `sk-${"a1".repeat(24)}`],
+		["project sk key", `sk-proj-${"a1_B-".repeat(20)}`],
+		...["ghp", "gho", "ghu", "ghs", "ghr"].map((prefix) => [`${prefix} token`, `${prefix}_${"A1".repeat(18)}`]),
+		["fine-grained GitHub token", `github_pat_${"a1_B".repeat(20)}12`],
+	];
+	const cases = [
+		...credentials.map(([name, value]) => ({ name, staged: `key="${value}"\n`, block: true })),
+		{ name: "empty staging", staged: initial, block: false },
+		{ name: "ordinary addition beside an existing credential", staged: `${initial}hello\n`, block: false },
+		{ name: "credential removal", staged: "hello\n", block: false },
+		{ name: "short placeholders and a public key", staged: "sk-example ghp_example AKIAEXAMPLE\n-----BEGIN PUBLIC KEY-----\n", block: false },
+		{ name: "token embedded in a longer identifier", staged: `prefix${githubToken}suffix\n`, block: false },
+		{ name: "unstaged credential", staged: "hello\n", unstaged: `${githubToken}\n`, block: false },
+		{ name: "credential-shaped filename", file: githubToken, staged: "hello\n", block: false },
+	];
+	for (const c of cases) await t.test(c.name, async () => {
+		git("read-tree", "HEAD");
+		const file = "file" in c ? c.file : "fixture.txt";
+		writeFileSync(join(cwd, file), c.staged);
+		git("add", "--", file);
+		if ("unstaged" in c) writeFileSync(join(cwd, file), c.unstaged);
+		const out = await executeHook(hook, { cwd, event: "before_tool", tool: "bash", command: 'git commit -m "x"' });
+		assert.deepEqual([out.ok, out.block], [true, c.block]);
+		assert.equal(out.detail, c.block ? "exit 2 · staged changes look like they contain a secret" : "exit 0");
+	});
 });
 
 test("templates read the payload; the default agent input summarizes the event", () => {
