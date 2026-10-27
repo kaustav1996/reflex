@@ -44,14 +44,20 @@ test("matching: event, tool (name, list, glob), command regex, path glob, prompt
 	assert.ok(!matches({ ...h({}), enabled: false }, bash));
 });
 
-test("the secret-blocking example validates and matches bash commits and pushes", () => {
+test("the secret-blocking example validates and matches bash commits", () => {
 	const hook = secretBlockingHook();
 	assert.equal(hook.id, "block-secret-commits");
 	const payload = { ...base, event: "before_tool" as const, tool: "bash" };
 	assert.ok(matches(hook, { ...payload, command: 'git commit -m "x"' }));
-	assert.ok(matches(hook, { ...payload, command: "git push origin main" }));
+	assert.ok(matches(hook, { ...payload, command: "git -C /work/app commit -m x" }));
+	assert.ok(matches(hook, { ...payload, command: '/usr/bin/git commit -m "x"' }));
+	assert.ok(matches(hook, { ...payload, command: 'GIT_DIR=/tmp/repo.git git commit -m "x"' }));
+	assert.ok(matches(hook, { ...payload, command: 'GIT_DIR=/tmp/repo.git GIT_WORK_TREE=/tmp/wt git commit -m "x"' }));
+	assert.ok(!matches(hook, { ...payload, command: "git push origin main" }));
 	assert.ok(!matches(hook, { ...payload, command: "git status" }));
 	assert.ok(!matches(hook, { ...payload, command: "git commit-tree" }));
+	assert.ok(!matches(hook, { ...payload, command: 'sudo git commit -m "x"' }));
+	assert.ok(!matches(hook, { ...payload, command: 'env GIT_DIR=/tmp/repo.git git commit -m "x"' }));
 	assert.ok(!matches(hook, { ...payload, tool: "edit", command: 'git commit -m "x"' }));
 	assert.ok(!matches(hook, { ...payload, event: "after_tool", command: 'git commit -m "x"' }));
 });

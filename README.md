@@ -209,12 +209,16 @@ that exits with code 2 blocks the tool call. A project can ship its own `.reflex
 those stay off until you approve that exact file, so cloning a repo never runs its commands.
 
 **Example: block commits with secrets.** [block-secret-commits.json](docs/examples/hooks/block-secret-commits.json)
-checks staged additions for private key headers, AWS access key ids, long `sk-` API keys and
-GitHub tokens before a bash command starting with `git commit` or `git push`. It blocks with
-exit 2 and a generic warning, never printing the matched credential. Copy it to
+checks staged additions (`git diff --cached`) for private key headers, AWS access key ids, long
+`sk-` API keys and GitHub tokens before a bash `git commit` — including `git -C <dir> commit`, an
+absolute git path like `/usr/bin/git commit`, and env prefixes like `GIT_DIR=… git commit`. It
+blocks with exit 2 and a generic warning, never printing the matched credential. Copy it to
 `.reflex/hooks.json` and approve the project hooks (or merge its `hooks` array into an existing
-file). This is a narrow heuristic, not a full secret scanner: it does not scan pushed history,
-unstaged files or commands wrapped in other shell syntax.
+file). This is a narrow heuristic, not a full secret scanner: it only looks at the staged index, so
+it catches secrets at commit time and does **not** scan already-committed history a later
+`git push` would send (after a normal commit the staged diff is empty). It also skips unstaged
+files and commands the match misses — wrapped shell syntax, `sudo git`, `env GIT_DIR=… git commit`,
+and similar.
 
 Every agent has a workflow diagram in the Agents tab. It shows the triggers, each step coloured
 by kind, the routes that TypeSafe answers decide in pink, and any chained agents. Nodes light up
